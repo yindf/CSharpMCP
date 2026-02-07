@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet:*)",
+      "mcp__csharp-ls__get_symbols",
+      "Bash(test:*)",
+      "Bash(cmd:*)",
+      "Bash(del:*)",
+      "Bash(timeout 10 npx:*)",
+      "Bash(timeout:*)",
+      "mcp__csharp-ls__search_symbols",
+      "mcp__zread__search_doc",
+      "mcp__zread__get_repo_structure",
+      "mcp__zread__read_file",
+      "Bash(Select-String:*)",
+      "Bash(Select-Object:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

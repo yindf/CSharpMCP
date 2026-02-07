@@ -1,0 +1,60 @@
+## .NET Core
+bin/
+obj/
+out/
+
+## Visual Studio
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Rider
+.idea/
+
+## Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## Tests
+TestResults/
+*.Coverage
+*.coveragexml
+*.coverage.json
+*.opencover
+coverage/
+coverage.xml
+coverage.html
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+project.lock.json
+project.fragment.lock.json
+
+## Other
+*.log
+*.tmp
+*.temp
+*.cache
+*.swp
+*~
+.DS_Store
+Thumbs.db
+mcp_*.log

@@ -1,0 +1,517 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.FindSymbols;
+using Microsoft.CodeAnalysis.Text;
+using Microsoft.Extensions.Logging;
+using CSharpMcp.Server.Models;
+using ModelsSymbolInfo = CSharpMcp.Server.Models.SymbolInfo;
+using ModelsSymbolKind = CSharpMcp.Server.Models.SymbolKind;
+using ModelsAccessibility = CSharpMcp.Server.Models.Accessibility;
+using RoslynReferencedSymbol = Microsoft.CodeAnalysis.FindSymbols.ReferencedSymbol;
+using RoslynSymbolKind = Microsoft.CodeAnalysis.SymbolKind;
+using RoslynAccessibility = Microsoft.CodeAnalysis.Accessibility;
+using System.Text;
+
+namespace CSharpMcp.Server.Roslyn;
+
+/// <summary>
+/// 符号分析器实现
+/// </summary>
+internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
+{
+    private readonly ILogger<SymbolAnalyzer> _logger;
+
+    public SymbolAnalyzer(ILogger<SymbolAnalyzer> logger)
+    {
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// 获取文档中的所有符号
+    /// </summary>
+    public async Task<IReadOnlyList<ISymbol>> GetDocumentSymbolsAsync(
+        Document document,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
+            if (semanticModel == null)
+            {
+                return [];
+            }
+
+            var root = await semanticModel.SyntaxTree.GetRootAsync(cancellationToken);
+            var symbols = new List<ISymbol>();
+
+            // Get all declared symbols in the document
+            var namespaceDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.NamespaceDeclarationSyntax>();
+            var typeDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax>();
+            var methodDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax>();
+            var propertyDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax>();
+            var fieldDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax>();
+            var eventDeclarations = root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.EventDeclarationSyntax>();
+
+            foreach (var ns in namespaceDeclarations)
+            {
+                var symbol = semanticModel.GetDeclaredSymbol(ns, cancellationToken);
+                if (symbol != null) symbols.Add(symbol);
+            }
+
+            foreach (var type in typeDeclarations)
+            {
+                var symbol = semanticModel.GetDeclaredSymbol(type, cancellationToken);
+                if (symbol != null) symbols.Add(symbol);
+            }
+
+            foreach (var method in methodDeclarations)
+            {
+                var symbol = semanticModel.GetDeclaredSymbol(method, cancellationToken);
+                if (symbol != null) symbols.Add(symbol);
+            }
+
+            foreach (var property in propertyDeclarations)
+            {
+                var symbol = semanticModel.GetDeclaredSymbol(property, cancellationToken);
+                if (symbol != null) symbols.Add(symbol);
+            }
+
+            foreach (var field in fieldDeclarations)
+            {
+                foreach (var variable in field.Declaration.Variables)
+                {
+                    var symbol = semanticModel.GetDeclaredSymbol(variable, cancellationToken);
+                    if (symbol != null) symbols.Add(symbol);
+                }
+            }
+
+            foreach (var evt in eventDeclarations)
+            {
+                var symbol = semanticModel.GetDeclaredSymbol(evt, cancellationToken);
+                if (symbol != null) symbols.Add(symbol);
+            }
+
+            _logger.LogDebug("Found {Count} symbols in document: {FilePath}", symbols.Count, document.FilePath);
+
+            return symbols;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get symbols for document: {FilePath}", document.FilePath);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 在位置处解析符号
+    /// </summary>
+    public async Task<ISymbol?> ResolveSymbolAtPositionAsync(
+        Document document,
+        int lineNumber,
+        int column,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
+            if (semanticModel == null)
+            {
+                return null;
+            }
+
+            var syntaxTree = await document.GetSyntaxTreeAsync(cancellationToken);
+            if (syntaxTree == null)
+            {
+                return null;
+            }
+
+            var text = await document.GetTextAsync(cancellationToken);
+            var line = text.Lines[lineNumber - 1];
+            var position = line.Start + Math.Min(column - 1, line.Span.Length);
+
+            var root = await syntaxTree.GetRootAsync(cancellationToken);
+
+            // Find the closest token to the position
+            var token = root.FindToken(position, findInsideTrivia: true);
+
+            if (token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None))
+            {
+                return null;
+            }
+
+            // Get the binding for the token's parent
+            var symbolInfo = semanticModel.GetSymbolInfo(token.Parent!, cancellationToken);
+            var symbol = symbolInfo.Symbol;
+            if (symbol == null)
+            {
+                // Try candidate symbols
+                symbol = symbolInfo.CandidateSymbols.FirstOrDefault();
+            }
+
+            if (symbol == null)
+            {
+                // Try declared symbol
+                symbol = semanticModel.GetDeclaredSymbol(token.Parent!, cancellationToken);
+            }
+
+            return symbol;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to resolve symbol at position: {LineNumber}:{Column}", lineNumber, column);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 按名称查找符号（支持模糊匹配）
+    /// </summary>
+    public async Task<IReadOnlyList<ISymbol>> FindSymbolsByNameAsync(
+        Document document,
+        string symbolName,
+        int? approximateLineNumber = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
+            if (semanticModel == null)
+            {
+                return [];
+            }
+
+            var allSymbols = await GetDocumentSymbolsAsync(document, cancellationToken);
+
+            // Exact match first
+            var exactMatches = allSymbols
+                .Where(s => string.Equals(s.Name, symbolName, StringComparison.Ordinal))
+                .ToList();
+
+            if (exactMatches.Count > 0)
+            {
+                return exactMatches;
+            }
+
+            // Case-insensitive match
+            var caseInsensitiveMatches = allSymbols
+                .Where(s => string.Equals(s.Name, symbolName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (caseInsensitiveMatches.Count > 0)
+            {
+                return caseInsensitiveMatches;
+            }
+
+            // Partial match
+            var partialMatches = allSymbols
+                .Where(s => s.Name.Contains(symbolName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // If line number is provided, find closest match
+            if (approximateLineNumber.HasValue && partialMatches.Count > 1)
+            {
+                partialMatches = partialMatches
+                    .OrderBy(s => Math.Abs(
+                        GetLineNumber(s) - approximateLineNumber.Value))
+                    .ToList();
+            }
+
+            return partialMatches;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to find symbols by name: {SymbolName}", symbolName);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 查找符号的所有引用
+    /// </summary>
+    public async Task<IReadOnlyList<RoslynReferencedSymbol>> FindReferencesAsync(
+        ISymbol symbol,
+        Solution solution,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var references = await SymbolFinder.FindReferencesAsync(symbol, solution, cancellationToken: cancellationToken);
+
+            _logger.LogDebug("Found {Count} references for symbol: {SymbolName}",
+                references.Count(), symbol.Name);
+
+            return references.ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to find references for symbol: {SymbolName}", symbol.Name);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 获取符号的定义位置
+    /// </summary>
+    public Task<SymbolLocation?> GetSymbolLocationAsync(
+        ISymbol symbol,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var locations = symbol.Locations;
+
+            // Prefer source locations
+            var sourceLocation = locations.FirstOrDefault(l => l.IsInSource);
+            if (sourceLocation != null)
+            {
+                var lineSpan = sourceLocation.GetLineSpan();
+                return Task.FromResult<SymbolLocation?>(new SymbolLocation(
+                    sourceLocation.SourceTree?.FilePath ?? "",
+                    lineSpan.StartLinePosition.Line + 1,
+                    lineSpan.EndLinePosition.Line + 1,
+                    lineSpan.StartLinePosition.Character + 1,
+                    lineSpan.EndLinePosition.Character + 1
+                ));
+            }
+
+            return Task.FromResult<SymbolLocation?>(null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get location for symbol: {SymbolName}", symbol.Name);
+            return Task.FromResult<SymbolLocation?>(null);
+        }
+    }
+
+    /// <summary>
+    /// 转换为 SymbolInfo 模型
+    /// </summary>
+    public async Task<ModelsSymbolInfo> ToSymbolInfoAsync(
+        ISymbol symbol,
+        DetailLevel detailLevel = DetailLevel.Summary,
+        int? bodyMaxLines = null,
+        CancellationToken cancellationToken = default)
+    {
+        var location = await GetSymbolLocationAsync(symbol, cancellationToken) ??
+            new SymbolLocation("", 0, 0, 0, 0);
+
+        var containingType = symbol.ContainingType?.Name ?? "";
+        var namespaceName = symbol.ContainingNamespace?.ToString() ?? "";
+
+        ModelsSymbolInfo result = new()
+        {
+            Name = symbol.Name,
+            Kind = MapSymbolKind(symbol.Kind),
+            Location = location,
+            ContainingType = containingType,
+            Namespace = namespaceName,
+            IsStatic = symbol.IsStatic,
+            IsVirtual = symbol.IsVirtual,
+            IsOverride = symbol.IsOverride,
+            IsAbstract = symbol.IsAbstract,
+            Accessibility = MapAccessibility(symbol.DeclaredAccessibility)
+        };
+
+        // Add signature for summary and above
+        if (detailLevel >= DetailLevel.Summary)
+        {
+            result = result with
+            {
+                Signature = CreateSignature(symbol)
+            };
+        }
+
+        // Add documentation for standard and above
+        if (detailLevel >= DetailLevel.Standard)
+        {
+            var doc = await GetDocumentationCommentAsync(symbol, cancellationToken);
+            result = result with
+            {
+                Documentation = doc
+            };
+        }
+
+        // Add source code for full level
+        if (detailLevel == DetailLevel.Full)
+        {
+            var sourceCode = await ExtractSourceCodeAsync(symbol, true, bodyMaxLines, cancellationToken);
+            result = result with
+            {
+                SourceCode = sourceCode
+            };
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 获取符号的文档注释
+    /// </summary>
+    public Task<string?> GetDocumentationCommentAsync(
+        ISymbol symbol,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var xmlComment = symbol.GetDocumentationCommentXml();
+            if (string.IsNullOrEmpty(xmlComment))
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            // Simple XML to text conversion
+            var text = System.Web.HttpUtility.HtmlDecode(xmlComment)
+                .Replace("<summary>", "")
+                .Replace("</summary>", "")
+                .Replace("<returns>", "Returns: ")
+                .Replace("</returns>", "")
+                .Replace("<param name=", "Parameter: ")
+                .Replace("/>", "")
+                .Replace("<", "")
+                .Replace(">", "")
+                .Trim();
+
+            return Task.FromResult<string?>(string.IsNullOrEmpty(text) ? null : text);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get documentation for symbol: {SymbolName}", symbol.Name);
+            return Task.FromResult<string?>(null);
+        }
+    }
+
+    /// <summary>
+    /// 提取符号的源代码
+    /// </summary>
+    public async Task<string?> ExtractSourceCodeAsync(
+        ISymbol symbol,
+        bool includeBody,
+        int? maxLines,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxRef == null)
+            {
+                return null;
+            }
+
+            var syntaxNode = await syntaxRef.GetSyntaxAsync(cancellationToken);
+            if (syntaxNode == null)
+            {
+                return null;
+            }
+
+            var fullSpan = syntaxNode.FullSpan;
+            var lines = syntaxNode.SyntaxTree.GetText().Lines;
+
+            var startLine = lines.GetLineFromPosition(fullSpan.Start).LineNumber;
+            var endLine = lines.GetLineFromPosition(fullSpan.End).LineNumber;
+
+            if (!includeBody)
+            {
+                // For methods, get just the signature
+                if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+                {
+                    var signatureEnd = methodSyntax.ParameterList.Span.End;
+                    var signatureLine = lines.GetLineFromPosition(signatureEnd);
+                    endLine = signatureLine.LineNumber;
+                }
+            }
+
+            // Apply max lines limit
+            if (maxLines.HasValue && (endLine - startLine + 1) > maxLines.Value)
+            {
+                endLine = startLine + maxLines.Value - 1;
+            }
+
+            // Extract source code with line numbers
+            var sb = new StringBuilder();
+            for (int i = startLine; i <= endLine; i++)
+            {
+                var line = lines[i];
+                var lineText = line.ToString();
+                sb.AppendLine($"{i + 1}: {lineText}");
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to extract source code for symbol: {SymbolName}", symbol.Name);
+            return null;
+        }
+    }
+
+    private static ModelsSymbolKind MapSymbolKind(RoslynSymbolKind kind)
+    {
+        return kind switch
+        {
+            RoslynSymbolKind.NamedType => ModelsSymbolKind.Class,
+            RoslynSymbolKind.Method => ModelsSymbolKind.Method,
+            RoslynSymbolKind.Property => ModelsSymbolKind.Property,
+            RoslynSymbolKind.Field => ModelsSymbolKind.Field,
+            RoslynSymbolKind.Event => ModelsSymbolKind.Event,
+            _ => ModelsSymbolKind.Method
+        };
+    }
+
+    private static ModelsAccessibility MapAccessibility(RoslynAccessibility accessibility)
+    {
+        return accessibility switch
+        {
+            RoslynAccessibility.Public => ModelsAccessibility.Public,
+            RoslynAccessibility.Internal => ModelsAccessibility.Internal,
+            RoslynAccessibility.Protected => ModelsAccessibility.Protected,
+            RoslynAccessibility.ProtectedOrInternal => ModelsAccessibility.ProtectedInternal,
+            RoslynAccessibility.ProtectedAndInternal => ModelsAccessibility.PrivateProtected,
+            RoslynAccessibility.Private => ModelsAccessibility.Private,
+            _ => ModelsAccessibility.Private
+        };
+    }
+
+    private static SymbolSignature CreateSignature(ISymbol symbol)
+    {
+        var parameters = new List<string>();
+        var typeParameters = new List<string>();
+        string? returnType = null;
+
+        switch (symbol)
+        {
+            case IMethodSymbol method:
+                returnType = method.ReturnType.ToDisplayString();
+                parameters = method.Parameters.Select(p => p.ToDisplayString()).ToList();
+                typeParameters = method.TypeParameters.Select(tp => tp.Name).ToList();
+                break;
+            case IPropertySymbol property:
+                returnType = property.Type.ToDisplayString();
+                parameters = property.Parameters.Select(p => p.ToDisplayString()).ToList();
+                break;
+            case IEventSymbol evt:
+                returnType = evt.Type.ToDisplayString();
+                break;
+            case IFieldSymbol field:
+                returnType = field.Type.ToDisplayString();
+                break;
+        }
+
+        return new SymbolSignature(
+            symbol.Name,
+            symbol.ToDisplayString(),
+            returnType,
+            parameters,
+            typeParameters
+        );
+    }
+
+    private static int GetLineNumber(ISymbol symbol)
+    {
+        var locations = symbol.Locations;
+        var sourceLocation = locations.FirstOrDefault(l => l.IsInSource);
+        if (sourceLocation != null)
+        {
+            return sourceLocation.GetLineSpan().StartLinePosition.Line + 1;
+        }
+        return 0;
+    }
+}
