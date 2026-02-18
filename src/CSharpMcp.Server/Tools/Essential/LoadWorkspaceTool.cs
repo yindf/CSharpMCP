@@ -1,12 +1,12 @@
-﻿using System;
+using System;
 using System.ComponentModel;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using CSharpMcp.Server.Models.Output;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.Essential;
@@ -22,7 +22,7 @@ public class LoadWorkspaceTool
     /// </summary>
     [McpServerTool, Description("Load a C# solution (.sln), project (.csproj), or directory for analysis")]
     public static async Task<string> LoadWorkspace(
-        string path,
+        [Description("Path to .sln file, .csproj file, or directory containing them")] string path,
         IWorkspaceManager workspaceManager,
         ILogger<LoadWorkspaceTool> logger,
         CancellationToken cancellationToken)
@@ -74,7 +74,7 @@ public class LoadWorkspaceTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         sb.AppendLine("## Load Workspace - Failed");
         sb.AppendLine();
         sb.AppendLine(message);

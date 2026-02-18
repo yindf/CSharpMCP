@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
@@ -10,9 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
-using Microsoft.CodeAnalysis.FindSymbols;
 
 namespace CSharpMcp.Server.Tools.Essential;
 
@@ -25,24 +23,24 @@ public class GetSymbolsTool
     /// <summary>
     /// Get all symbols in a C# document with optional filtering
     /// </summary>
-    /// <param name="parameters">Tool parameters including file path and filters</param>
-    /// <param name="workspaceManager">Workspace manager service</param>
-    /// <param name="logger">Logger instance</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>List of symbols found in the document</returns>
     [McpServerTool, Description("Get all symbols (classes, methods, properties, etc.) declared in a C# file")]
     public static async Task<string> GetSymbols(
-        GetSymbolsParams parameters,
+        [Description("Path to the C# file (absolute, relative, or filename only for fuzzy matching)")] string filePath,
         IWorkspaceManager workspaceManager,
         ILogger<GetSymbolsTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("Whether to include method/property implementation in output")] bool includeBody = true,
+        [Description("Maximum number of lines to include for implementation code")] int maxBodyLines = 100,
+        [Description("Minimum accessibility level: Public, Internal, Protected, Private")] string minVisibility = "Private",
+        [Description("Filter by symbol kinds: e.g., NamedType, Method, Property, Field (null = all)")] string[]? symbolKinds = null,
+        [Description("Exclude local variables and parameters from output")] bool excludeLocal = true)
     {
         try
         {
-            if (parameters == null)
+            if (string.IsNullOrWhiteSpace(filePath))
             {
-                logger.LogError("Error executing GetSymbolsTool, parameters == null");
-                return GetErrorHelpResponse($"Failed to get symbols: parameters == null");
+                logger.LogError("Error executing GetSymbolsTool, filePath is null or empty");
+                return GetErrorHelpResponse($"Failed to get symbols: filePath is required");
             }
 
             // Check workspace state
@@ -52,27 +50,25 @@ public class GetSymbolsTool
                 return workspaceError;
             }
 
-            logger.LogDebug("Getting symbols for: {FilePath}", parameters.FilePath);
+            logger.LogDebug("Getting symbols for: {FilePath}", filePath);
 
-            var document = await workspaceManager.GetDocumentAsync(parameters.FilePath, cancellationToken);
+            var document = await workspaceManager.GetDocumentAsync(filePath, cancellationToken);
             if (document == null)
             {
-                logger.LogWarning("Document not found: {FilePath}", parameters.FilePath);
+                logger.LogWarning("Document not found: {FilePath}", filePath);
                 return GetErrorHelpResponse(
-                    $"Document not found: `{parameters.FilePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
+                    $"Document not found: `{filePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
             }
 
             var symbols = (await document.GetDeclaredSymbolsAsync(cancellationToken)).ToImmutableList();
 
             // Apply filters
-            symbols = ApplyFilters(symbols, parameters);
+            symbols = ApplyFilters(symbols, minVisibility, symbolKinds, excludeLocal);
 
-            logger.LogDebug("Found {Count} symbols in {FilePath}", symbols.Count, parameters.FilePath);
-
-            logger.LogDebug("Found {Count} symbols in {FilePath}", symbols.Count, parameters.FilePath);
+            logger.LogDebug("Found {Count} symbols in {FilePath}", symbols.Count, filePath);
 
             // Build Markdown directly
-            return await BuildSymbolsMarkdownAsync(parameters.FilePath, symbols, parameters, cancellationToken);
+            return await BuildSymbolsMarkdownAsync(filePath, symbols, includeBody, maxBodyLines, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -92,14 +88,13 @@ public class GetSymbolsTool
         sb.AppendLine();
         sb.AppendLine("```");
         sb.AppendLine("GetSymbols(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    symbolName: \"ClassName\"");
+        sb.AppendLine("    filePath: \"path/to/File.cs\"");
         sb.AppendLine(")");
         sb.AppendLine("```");
         sb.AppendLine();
         sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetSymbols(filePath: \"C:/MyProject/MyClass.cs\", symbolName: \"MyClass\")`");
-        sb.AppendLine("- `GetSymbols(filePath: \"./Utils.cs\", symbolName: \"Helper\", includeBody: true)`");
+        sb.AppendLine("- `GetSymbols(filePath: \"C:/MyProject/MyClass.cs\")`");
+        sb.AppendLine("- `GetSymbols(filePath: \"./Utils.cs\", minVisibility: \"Public\")`");
         sb.AppendLine();
         return sb.ToString();
     }
@@ -107,7 +102,8 @@ public class GetSymbolsTool
     private static async Task<string> BuildSymbolsMarkdownAsync(
         string filePath,
         IReadOnlyList<ISymbol> symbols,
-        GetSymbolsParams parameters,
+        bool includeBody,
+        int maxBodyLines,
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
@@ -142,26 +138,31 @@ public class GetSymbolsTool
     /// <summary>
     /// Apply visibility, kind, and local filters to the symbol list
     /// </summary>
-    private static ImmutableList<ISymbol> ApplyFilters(ImmutableList<ISymbol> symbols, GetSymbolsParams parameters)
+    private static ImmutableList<ISymbol> ApplyFilters(
+        ImmutableList<ISymbol> symbols,
+        string minVisibility,
+        string[]? symbolKinds,
+        bool excludeLocal)
     {
-        // Filter out implicitly declared symbols first
         var filtered = symbols.Where(s => !s.IsImplicitlyDeclared);
 
-        // Apply visibility filter
-        if (parameters.MinVisibility > Accessibility.Private)
+        // Parse minVisibility string to Accessibility enum
+        if (Enum.TryParse<Accessibility>(minVisibility, ignoreCase: true, out var minAccess) &&
+            minAccess != Accessibility.Private)
         {
-            filtered = FilterByAccessibility(filtered, parameters.MinVisibility);
+            filtered = FilterByAccessibility(filtered, minAccess);
         }
 
         // Apply symbol kind filter
-        if (parameters.SymbolKinds != null && parameters.SymbolKinds.Length > 0)
+        if (symbolKinds is { Length: > 0 })
         {
-            var kinds = parameters.SymbolKinds.Select(ParseSymbolKind).ToHashSet();
+            var kinds = new HashSet<SymbolKind>(
+                symbolKinds.Select(ParseSymbolKind));
             filtered = filtered.Where(s => kinds.Contains(s.Kind));
         }
 
         // Exclude local variables and parameters
-        if (parameters.ExcludeLocal)
+        if (excludeLocal)
         {
             filtered = filtered.Where(s => s.Kind != SymbolKind.Local && s.Kind != SymbolKind.Parameter);
         }
@@ -190,6 +191,8 @@ public class GetSymbolsTool
     /// </summary>
     private static SymbolKind ParseSymbolKind(string kind)
     {
-        return Enum.TryParse<SymbolKind>(kind, ignoreCase: true, out var result) ? result : SymbolKind.Namespace;
+        return Enum.TryParse<SymbolKind>(kind, ignoreCase: true, out var result)
+            ? result
+            : SymbolKind.Namespace;
     }
 }

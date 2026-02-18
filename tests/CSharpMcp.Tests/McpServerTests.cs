@@ -114,7 +114,7 @@ public class McpServerTests : IClassFixture<McpTestFixture>
             typeof(GetInheritanceHierarchyTool),
             typeof(GetCallGraphTool),
             typeof(GetTypeMembersTool),
-            typeof(GetSymbolCompleteTool),
+            typeof(GetSymbolInfoTool),
             typeof(BatchGetSymbolsTool),
             typeof(GetDiagnosticsTool)
         };
@@ -140,7 +140,7 @@ public class McpServerTests : IClassFixture<McpTestFixture>
             typeof(GetInheritanceHierarchyParams),
             typeof(GetCallGraphParams),
             typeof(GetTypeMembersParams),
-            typeof(GetSymbolCompleteParams),
+            typeof(GetSymbolInfoParams),
             typeof(BatchGetSymbolsParams),
             typeof(GetDiagnosticsParams)
         };

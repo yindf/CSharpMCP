@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
@@ -12,7 +12,6 @@ using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.Essential;
@@ -28,16 +27,21 @@ public class FindReferencesTool
     /// </summary>
     [McpServerTool, Description("Find all references to a symbol across the workspace")]
     public static async Task<string> FindReferences(
-        FindReferencesParams parameters,
+        [Description("Path to the file containing the symbol")] string filePath,
         IWorkspaceManager workspaceManager,
         ILogger<FindReferencesTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("1-based line number near the symbol declaration")] int lineNumber = 0,
+        [Description("The name of the symbol to find references for")] string? symbolName = null,
+        [Description("Whether to include source code context around each reference")] bool includeContext = true,
+        [Description("Number of lines to show before and after each reference")] int contextLines = 3,
+        [Description("Show only file names and reference counts, not detailed code context")] bool compact = false)
     {
         try
         {
-            if (parameters == null)
+            if (string.IsNullOrWhiteSpace(filePath))
             {
-                throw new ArgumentNullException(nameof(parameters));
+                throw new ArgumentException("File path is required", nameof(filePath));
             }
 
             // Check workspace state
@@ -48,13 +52,13 @@ public class FindReferencesTool
             }
 
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
-                parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                filePath, lineNumber, symbolName);
 
             // First, resolve the symbol
-            var symbol = await parameters.FindSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, cancellationToken);
             if (symbol == null)
             {
-                var errorDetails = BuildErrorDetails(parameters, workspaceManager, cancellationToken);
+                var errorDetails = await BuildErrorDetailsAsync(filePath, lineNumber, symbolName ?? "Not specified", workspaceManager, cancellationToken);
                 logger.LogWarning("Symbol not found: {Details}", errorDetails);
                 return GetErrorHelpResponse(errorDetails);
             }
@@ -71,7 +75,7 @@ public class FindReferencesTool
             logger.LogInformation("Found {Count} references for {SymbolName}", referencedSymbols.Count, symbol.Name);
 
             // Build Markdown directly
-            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, parameters.Compact, cancellationToken);
+            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, compact, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -86,7 +90,7 @@ public class FindReferencesTool
             "Find References",
             message,
             "FindReferences(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line near the symbol declaration\n    symbolName: \"MyMethod\"\n)",
-            "- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeContext: true)`"
+            "- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", compact: true)`"
         );
     }
 
@@ -168,56 +172,55 @@ public class FindReferencesTool
         return location.Location.GetLineSpan().StartLinePosition.Line + 1;
     }
 
-
-    private static string BuildErrorDetails(
-        FindReferencesParams parameters,
+    private static async Task<string> BuildErrorDetailsAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
         IWorkspaceManager workspaceManager,
         CancellationToken cancellationToken)
     {
-        var details = new StringBuilder();
-        details.AppendLine($"## Symbol Not Found");
-        details.AppendLine();
-        details.AppendLine($"**File**: `{parameters.FilePath}`");
-        details.AppendLine($"**Line Number**: {parameters.LineNumber.ToString() ?? "Not specified"}");
-        details.AppendLine($"**Symbol Name**: `{parameters.SymbolName ?? "Not specified"}`");
-        details.AppendLine();
-
-        // 尝试读取文件内容显示该行
-        try
-        {
-            var document = workspaceManager.GetCurrentSolution()?.Projects
-                .SelectMany(p => p.Documents)
-                .FirstOrDefault(d => d.FilePath == parameters.FilePath);
-
-            if (document != null && parameters.LineNumber > 0)
-            {
-                var sourceText = document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
-                if (sourceText != null)
-                {
-                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber - 1);
-                    if (line.LineNumber > 0)
-                    {
-                        details.AppendLine($"**Line Content**:");
-                        details.AppendLine($"```csharp");
-                        details.AppendLine(line.ToString().Trim());
-                        details.AppendLine($"```");
-                        details.AppendLine();
-                    }
-                }
-            }
-        }
-        catch
-        {
-            details.AppendLine($"**Line Content**: Unable to read file content");
-            details.AppendLine();
-        }
-
-        details.AppendLine($"**Possible Reasons**:");
-        details.AppendLine($"1. The symbol is defined in an external library (not in this workspace)");
-        details.AppendLine($"2. The symbol is a built-in C# type or keyword");
-        details.AppendLine($"3. The file path or line number is incorrect");
-        details.AppendLine($"4. The workspace needs to be reloaded (try LoadWorkspace again)");
+        var details = await MarkdownHelper.BuildSymbolNotFoundErrorDetailsAsync(
+            filePath,
+            lineNumber,
+            symbolName,
+            workspaceManager.GetCurrentSolution(),
+            cancellationToken);
 
         return details.ToString();
+    }
+
+    /// <summary>
+    /// Resolve a single symbol from file location info
+    /// </summary>
+    private static async Task<ISymbol?> ResolveSymbolAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+    }
+
+    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+        IEnumerable<ISymbol> symbols,
+        string filePath,
+        int lineNumber)
+    {
+        var filename = Path.GetFileName(filePath)?.ToLowerInvariant();
+        return symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - lineNumber)));
     }
 }

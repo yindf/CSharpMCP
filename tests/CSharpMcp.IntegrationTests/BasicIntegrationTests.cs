@@ -26,7 +26,7 @@ public class BasicIntegrationTests
         var programFile = Path.Combine(baseDir, "src", "CSharpMcp.Server", "Program.cs");
         var getSymbolsFile = Path.Combine(baseDir, "src", "CSharpMcp.Server", "Tools", "Essential", "GetSymbolsTool.cs");
         var inheritanceFile = Path.Combine(baseDir, "src", "CSharpMcp.Server", "Tools", "HighValue", "GetInheritanceHierarchyTool.cs");
-        var symbolCompleteFile = Path.Combine(baseDir, "src", "CSharpMcp.Server", "Tools", "Optimization", "GetSymbolCompleteTool.cs");
+        var symbolCompleteFile = Path.Combine(baseDir, "src", "CSharpMcp.Server", "Tools", "Optimization", "GetSymbolInfoTool.cs");
 
         _output.WriteLine($"Looking for files in: {baseDir}");
 
@@ -35,7 +35,7 @@ public class BasicIntegrationTests
         Assert.True(File.Exists(programFile), $"Program file not found: {programFile}");
         Assert.True(File.Exists(getSymbolsFile), $"GetSymbolsTool file not found: {getSymbolsFile}");
         Assert.True(File.Exists(inheritanceFile), $"GetInheritanceHierarchyTool file not found: {inheritanceFile}");
-        Assert.True(File.Exists(symbolCompleteFile), $"GetSymbolCompleteTool file not found: {symbolCompleteFile}");
+        Assert.True(File.Exists(symbolCompleteFile), $"GetSymbolInfoTool file not found: {symbolCompleteFile}");
 
         _output.WriteLine("✓ Project structure is valid");
     }
@@ -135,7 +135,7 @@ public class ScenarioTests
         // Optimization tools
         var optimizationTools = new[]
         {
-            "CSharpMcp.Server.Tools.Optimization.GetSymbolCompleteTool",
+            "CSharpMcp.Server.Tools.Optimization.GetSymbolInfoTool",
             "CSharpMcp.Server.Tools.Optimization.BatchGetSymbolsTool",
             "CSharpMcp.Server.Tools.Optimization.GetDiagnosticsTool"
         };

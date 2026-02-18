@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -26,18 +26,16 @@ public class GetDiagnosticsTool
     /// </summary>
     [McpServerTool, Description("Get compiler diagnostics (errors, warnings, info) for files or the entire workspace")]
     public static async Task<string> GetDiagnostics(
-        GetDiagnosticsParams parameters,
         IWorkspaceManager workspaceManager,
         ILogger<GetDiagnosticsTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("Path to specific file to check (null = entire workspace)")] string? filePath = null,
+        [Description("Whether to include warnings in output")] bool includeWarnings = true,
+        [Description("Whether to include info messages in output")] bool includeInfo = false,
+        [Description("Whether to include hidden diagnostics")] bool includeHidden = false)
     {
         try
         {
-            if (parameters == null)
-            {
-                throw new ArgumentNullException(nameof(parameters));
-            }
-
             // Check workspace state
             var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Diagnostics");
             if (workspaceError != null)
@@ -45,7 +43,7 @@ public class GetDiagnosticsTool
                 return workspaceError;
             }
 
-            logger.LogInformation("Getting diagnostics for: {FilePath}", parameters.FilePath ?? "entire workspace");
+            logger.LogInformation("Getting diagnostics for: {FilePath}", filePath ?? "entire workspace");
 
             var diagnostics = new List<DiagnosticItem>();
             var filesWithDiagnostics = new HashSet<string>();
@@ -59,16 +57,16 @@ public class GetDiagnosticsTool
             }
 
             // Determine which projects/documents to analyze
-            if (!string.IsNullOrEmpty(parameters.FilePath))
+            if (!string.IsNullOrEmpty(filePath))
             {
                 // Single file
-                var document = await workspaceManager.GetDocumentAsync(parameters.FilePath, cancellationToken);
+                var document = await workspaceManager.GetDocumentAsync(filePath, cancellationToken);
                 if (document == null)
                 {
-                    return GetErrorHelpResponse($"File not found: `{parameters.FilePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
+                    return GetErrorHelpResponse($"File not found: `{filePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
                 }
 
-                var result = await ProcessDocumentAsync(document, parameters, filesWithDiagnostics, logger, cancellationToken);
+                var result = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
                 diagnostics.AddRange(result);
             }
             else
@@ -78,7 +76,7 @@ public class GetDiagnosticsTool
                 {
                     foreach (var document in project.Documents)
                     {
-                        var result = await ProcessDocumentAsync(document, parameters, filesWithDiagnostics, logger, cancellationToken);
+                        var result = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
                         diagnostics.AddRange(result);
                     }
                 }
@@ -122,7 +120,9 @@ public class GetDiagnosticsTool
 
     private static async Task<List<DiagnosticItem>> ProcessDocumentAsync(
         Document document,
-        GetDiagnosticsParams parameters,
+        bool includeWarnings,
+        bool includeInfo,
+        bool includeHidden,
         HashSet<string> filesWithDiagnostics,
         ILogger<GetDiagnosticsTool> logger,
         CancellationToken cancellationToken)
@@ -139,14 +139,14 @@ public class GetDiagnosticsTool
         var compilation = semanticModel.Compilation;
         var compilationDiagnostics = compilation.GetDiagnostics(cancellationToken);
 
-        diagnostics.AddRange(ProcessDiagnostics(compilationDiagnostics, document, parameters, filesWithDiagnostics));
+        diagnostics.AddRange(ProcessDiagnostics(compilationDiagnostics, document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics));
 
         // Get syntactic diagnostics
         var syntaxRoot = await document.GetSyntaxRootAsync(cancellationToken);
         if (syntaxRoot != null)
         {
             var syntaxDiagnostics = syntaxRoot.GetDiagnostics();
-            diagnostics.AddRange(ProcessDiagnostics(syntaxDiagnostics, document, parameters, filesWithDiagnostics));
+            diagnostics.AddRange(ProcessDiagnostics(syntaxDiagnostics, document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics));
         }
 
         return diagnostics;
@@ -155,14 +155,16 @@ public class GetDiagnosticsTool
     private static List<DiagnosticItem> ProcessDiagnostics(
         IEnumerable<Microsoft.CodeAnalysis.Diagnostic> diagnostics,
         Document document,
-        GetDiagnosticsParams parameters,
+        bool includeWarnings,
+        bool includeInfo,
+        bool includeHidden,
         HashSet<string> filesWithDiagnostics)
     {
         var result = new List<DiagnosticItem>();
 
         foreach (var diagnostic in diagnostics)
         {
-            if (!ShouldIncludeDiagnostic(diagnostic, parameters))
+            if (!ShouldIncludeDiagnostic(diagnostic, includeWarnings, includeInfo, includeHidden))
                 continue;
 
             if (diagnostic.Location.SourceTree == null)
@@ -193,32 +195,22 @@ public class GetDiagnosticsTool
         return result;
     }
 
-    private static bool ShouldIncludeDiagnostic(Microsoft.CodeAnalysis.Diagnostic diagnostic, GetDiagnosticsParams parameters)
+    private static bool ShouldIncludeDiagnostic(Microsoft.CodeAnalysis.Diagnostic diagnostic, bool includeWarnings, bool includeInfo, bool includeHidden)
     {
-        // Check severity filter
-        if (parameters.SeverityFilter != null && parameters.SeverityFilter.Count > 0)
-        {
-            var severity = GetSeverity(diagnostic.Severity);
-            if (!parameters.SeverityFilter.Contains(severity))
-            {
-                return false;
-            }
-        }
-
         // Check warning inclusion
-        if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Warning && !parameters.IncludeWarnings)
+        if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Warning && !includeWarnings)
         {
             return false;
         }
 
         // Check info inclusion
-        if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Info && !parameters.IncludeInfo)
+        if (diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Info && !includeInfo)
         {
             return false;
         }
 
         // Check hidden inclusion
-        if (!diagnostic.IsSuppressed && !parameters.IncludeHidden && diagnostic.DefaultSeverity == Microsoft.CodeAnalysis.DiagnosticSeverity.Hidden)
+        if (!diagnostic.IsSuppressed && !includeHidden && diagnostic.DefaultSeverity == Microsoft.CodeAnalysis.DiagnosticSeverity.Hidden)
         {
             return false;
         }

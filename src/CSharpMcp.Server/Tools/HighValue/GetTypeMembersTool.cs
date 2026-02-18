@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.HighValue;
@@ -24,16 +23,19 @@ public class GetTypeMembersTool
     /// </summary>
     [McpServerTool, Description("Get all members (methods, properties, fields, events) of a type")]
     public static async Task<string> GetTypeMembers(
-        GetTypeMembersParams parameters,
+        [Description("Path to the file containing the type")] string filePath,
         IWorkspaceManager workspaceManager,
         ILogger<GetTypeMembersTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("1-based line number near the type declaration")] int lineNumber = 0,
+        [Description("The name of the type to get members for")] string? symbolName = null,
+        [Description("Whether to include inherited members")] bool includeInherited = false)
     {
         try
         {
-            if (parameters == null)
+            if (string.IsNullOrWhiteSpace(filePath))
             {
-                throw new ArgumentNullException(nameof(parameters));
+                throw new ArgumentException("File path is required", nameof(filePath));
             }
 
             // Check workspace state
@@ -44,32 +46,29 @@ public class GetTypeMembersTool
             }
 
             logger.LogInformation("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
-                parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                filePath, lineNumber, symbolName);
 
             // Resolve the type symbol
-            var symbol = await parameters.FindSymbolAsync(
-                workspaceManager,
-                SymbolFilter.Type,
-                cancellationToken);
+            var symbol = await ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
             if (symbol == null)
             {
-                logger.LogWarning("Type not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
+                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
             }
 
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
-                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), parameters.FilePath, parameters.LineNumber);
+                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
             }
 
             // Get all members as ISymbol
-            var members = GetMembers(type, parameters.IncludeInherited);
+            var members = GetMembers(type, includeInherited);
 
             logger.LogInformation("Retrieved {Count} members for: {TypeName}", members.Count, type.Name);
 
             // Build Markdown directly
-            return BuildMembersMarkdown(type, members, parameters);
+            return BuildMembersMarkdown(type, members);
         }
         catch (Exception ex)
         {
@@ -107,8 +106,7 @@ public class GetTypeMembersTool
 
     private static string BuildMembersMarkdown(
         INamedTypeSymbol type,
-        List<ISymbol> members,
-        GetTypeMembersParams parameters)
+        List<ISymbol> members)
     {
         var sb = new StringBuilder();
         var typeName = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
@@ -212,5 +210,41 @@ public class GetTypeMembersTool
         sb.AppendLine("- Ensure the line number points to a type declaration (not a method, property, etc.)");
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Resolve a single symbol from file location info
+    /// </summary>
+    private static async Task<ISymbol?> ResolveSymbolAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+    }
+
+    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+        IEnumerable<ISymbol> symbols,
+        string filePath,
+        int lineNumber)
+    {
+        var filename = System.IO.Path.GetFileName(filePath)?.ToLowerInvariant();
+        return symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - lineNumber)));
     }
 }

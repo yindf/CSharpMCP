@@ -392,7 +392,7 @@ public static class SymbolExtensions
 
 
     public static async Task<string> GetCallGraphMarkdown(this IMethodSymbol method,
-        Solution solution, int maxCaller, int maxCallee, CancellationToken cancellationToken)
+        Solution solution, int maxCallers, int maxCallees, CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
         var methodName = method.Name;
@@ -403,12 +403,12 @@ public static class SymbolExtensions
         var callers = (await SymbolFinder.FindCallersAsync(method, solution, cancellationToken)).ToArray();
         var callees = (await method.GetCalleesAsync(solution, cancellationToken)).ToArray();
 
-        var callerCount = Math.Min(callers.Length, maxCaller);
-        sb.AppendLine($"- Callers: {callerCount} shown (of {callers.Length} total, maxCaller={maxCaller})");
+        var callerCount = Math.Min(callers.Length, maxCallers);
+        sb.AppendLine($"- Callers: {callerCount} shown (of {callers.Length} total, maxCallers={maxCallers})");
         sb.AppendLine();
 
         // Callers
-        foreach (var caller in callers.Take(maxCaller))
+        foreach (var caller in callers.Take(maxCallers))
         {
             var signature = caller.CallingSymbol.GetSignature();
             var (start, end) = caller.CallingSymbol.GetLineRange();
@@ -420,19 +420,19 @@ public static class SymbolExtensions
             }
         }
 
-        if (callers.Length > maxCaller)
+        if (callers.Length > maxCallers)
         {
-            sb.AppendLine($"- ... {callers.Length - maxCaller} more callers (increase maxCaller to see more)");
+            sb.AppendLine($"- ... {callers.Length - maxCallers} more callers (increase maxCallers to see more)");
         }
 
         sb.AppendLine();
 
-        var calleeCount = Math.Min(callees.Length, maxCallee);
-        sb.AppendLine($"- Callees: {calleeCount} shown (of {callees.Length} total, maxCallee={maxCallee})");
+        var calleeCount = Math.Min(callees.Length, maxCallees);
+        sb.AppendLine($"- Callees: {calleeCount} shown (of {callees.Length} total, maxCallees={maxCallees})");
         sb.AppendLine();
 
         // Callees - unified format with callers
-        foreach (var callee in callees.Take(maxCallee))
+        foreach (var callee in callees.Take(maxCallees))
         {
             var signature = callee.Method.GetSignature();
             var (start, end) = callee.Method.GetLineRange();
@@ -440,9 +440,9 @@ public static class SymbolExtensions
             sb.AppendLine($"  - `{callee.SourceText.ToString().Trim()}` {callee.FileLinePositionSpan.ToFileNameWithLineNumber()}");
         }
 
-        if (callees.Length > maxCallee)
+        if (callees.Length > maxCallees)
         {
-            sb.AppendLine($"- ... {callees.Length - maxCallee} more callees (increase maxCallee to see more)");
+            sb.AppendLine($"- ... {callees.Length - maxCallees} more callees (increase maxCallees to see more)");
         }
 
         sb.AppendLine();

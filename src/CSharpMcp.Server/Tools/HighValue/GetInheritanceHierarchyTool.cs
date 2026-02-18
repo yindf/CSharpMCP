@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
@@ -7,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.HighValue;
@@ -23,17 +23,21 @@ public class GetInheritanceHierarchyTool
     /// </summary>
     [McpServerTool, Description("Get the complete inheritance hierarchy for a type including base types, interfaces, and derived types")]
     public static async Task<string> GetInheritanceHierarchy(
-        GetInheritanceHierarchyParams parameters,
+        [Description("Path to the file containing the type")] string filePath,
         IWorkspaceManager workspaceManager,
         IInheritanceAnalyzer inheritanceAnalyzer,
         ILogger<GetInheritanceHierarchyTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("1-based line number near the type declaration")] int lineNumber = 0,
+        [Description("The name of the type to analyze")] string? symbolName = null,
+        [Description("Whether to include derived types in the hierarchy")] bool includeDerived = true,
+        [Description("Maximum depth for derived type search (0 = unlimited, default 3)")] int maxDerivedDepth = 3)
     {
         try
         {
-            if (parameters == null)
+            if (string.IsNullOrWhiteSpace(filePath))
             {
-                throw new ArgumentNullException(nameof(parameters));
+                throw new ArgumentException("File path is required", nameof(filePath));
             }
 
             // Check workspace state
@@ -44,43 +48,40 @@ public class GetInheritanceHierarchyTool
             }
 
             logger.LogInformation("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
-                parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                filePath, lineNumber, symbolName);
 
             // Resolve the type symbol
-            var symbol = await parameters.FindSymbolAsync(
-                workspaceManager,
-                SymbolFilter.Type,
-                cancellationToken);
+            var symbol = await ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
             if (symbol == null)
             {
-                logger.LogWarning("Type not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
+                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
             }
 
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
-                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), parameters.FilePath, parameters.LineNumber);
+                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
             }
 
             // Get the solution
             var solution = workspaceManager.GetCurrentSolution();
 
             // Use default max depth of 3 if not specified (0 means not specified in JSON)
-            var maxDepth = parameters.MaxDerivedDepth > 0 ? parameters.MaxDerivedDepth : 3;
+            var maxDepth = maxDerivedDepth > 0 ? maxDerivedDepth : 3;
 
             // Get inheritance tree
             var tree = await inheritanceAnalyzer.GetInheritanceTreeAsync(
                 type,
                 solution,
-                parameters.IncludeDerived,
+                includeDerived,
                 maxDepth,
                 cancellationToken);
 
             logger.LogInformation("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
 
             // Build Markdown directly
-            return BuildHierarchyMarkdown(type, tree, parameters);
+            return BuildHierarchyMarkdown(type, tree, includeDerived);
         }
         catch (Exception ex)
         {
@@ -102,7 +103,7 @@ public class GetInheritanceHierarchyTool
     private static string BuildHierarchyMarkdown(
         INamedTypeSymbol type,
         InheritanceTree tree,
-        GetInheritanceHierarchyParams parameters)
+        bool includeDerived)
     {
         var sb = new StringBuilder();
         var typeName = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
@@ -142,7 +143,7 @@ public class GetInheritanceHierarchyTool
         }
 
         // Derived types
-        if (parameters.IncludeDerived && tree.DerivedTypes.Count > 0)
+        if (includeDerived && tree.DerivedTypes.Count > 0)
         {
             sb.AppendLine($"### Derived Types ({tree.DerivedTypes.Count}, depth: {tree.Depth})");
             sb.AppendLine();
@@ -220,5 +221,41 @@ public class GetInheritanceHierarchyTool
             var fileName = System.IO.Path.GetFileName(filePath);
             sb.AppendLine($"  - `{fileName}:{startLine}`");
         }
+    }
+
+    /// <summary>
+    /// Resolve a single symbol from file location info
+    /// </summary>
+    private static async Task<ISymbol?> ResolveSymbolAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+    }
+
+    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+        IEnumerable<ISymbol> symbols,
+        string filePath,
+        int lineNumber)
+    {
+        var filename = System.IO.Path.GetFileName(filePath)?.ToLowerInvariant();
+        return symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - lineNumber)));
     }
 }

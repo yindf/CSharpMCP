@@ -50,7 +50,7 @@ public record GetSymbolsParams
     /// 方法体最大行数
     /// </summary>
     [Description("Maximum number of lines to include for implementation code")]
-    public int BodyMaxLines { get; init; } = 100;
+    public int MaxBodyLines { get; init; } = 100;
 
     /// <summary>
     /// Minimum accessibility level to include (default: Private = show all)
@@ -70,24 +70,6 @@ public record GetSymbolsParams
     [Description("Exclude local variables and parameters from output")]
     public bool ExcludeLocal { get; init; } = true;
 
-}
-
-/// <summary>
-/// go_to_definition 工具参数
-/// </summary>
-public record GoToDefinitionParams : FileLocationParams
-{
-    /// <summary>
-    /// 是否包含方法体
-    /// </summary>
-    [Description("Whether to include method/property implementation in output")]
-    public bool IncludeBody { get; init; } = true;
-
-    /// <summary>
-    /// 方法体最大行数
-    /// </summary>
-    [Description("Maximum number of lines to include for implementation code")]
-    public int BodyMaxLines { get; init; } = 100;
 }
 
 /// <summary>
@@ -153,14 +135,14 @@ public record ResolveSymbolParams : FileLocationParams
     /// 方法体最大行数
     /// </summary>
     [Description("Maximum number of lines to include for implementation code")]
-    public int BodyMaxLines { get; init; } = 50;
+    public int MaxBodyLines { get; init; } = 50;
 
     /// <summary>
     /// When true, only return the primary symbol definition (types, methods)
     /// When false, return all matching symbols (default behavior)
     /// </summary>
     [Description("Only return primary symbol definitions (classes, interfaces, methods), excluding fields/properties")]
-    public bool PrimaryOnly { get; init; } = true;
+    public bool DefinitionsOnly { get; init; } = true;
 }
 
 /// <summary>
@@ -190,13 +172,13 @@ public record GetCallGraphParams : FileLocationParams
     /// 最多显示调用者数量
     /// </summary>
     [Description("Maximum number of callers to display")]
-    public int MaxCaller { get; init; } = 20;
+    public int MaxCallers { get; init; } = 20;
 
     /// <summary>
     /// 最多显示调用数量
     /// </summary>
     [Description("Maximum number of callees to display")]
-    public int MaxCallee { get; init; } = 10;
+    public int MaxCallees { get; init; } = 10;
 }
 
 /// <summary>
@@ -213,15 +195,15 @@ public record GetTypeMembersParams : FileLocationParams
 }
 
 /// <summary>
-/// get_symbol_complete 工具参数 - 整合多个信息源获取完整符号信息
+/// get_symbol_info 工具参数 - 整合多个信息源获取完整符号信息
 /// </summary>
-public record GetSymbolCompleteParams : FileLocationParams
+public record GetSymbolInfoParams : FileLocationParams
 {
     /// <summary>
     /// 方法体最大行数
     /// </summary>
     [Description("Maximum lines of implementation code to include")]
-    public int BodyMaxLines { get; init; } = 100;
+    public int MaxBodyLines { get; init; } = 100;
 
     /// <summary>
     /// 是否包含引用
@@ -275,7 +257,7 @@ public record BatchGetSymbolsParams
     /// 方法体最大行数
     /// </summary>
     [Description("Maximum lines per symbol implementation")]
-    public int BodyMaxLines { get; init; } = 50;
+    public int MaxBodyLines { get; init; } = 50;
 }
 
 /// <summary>

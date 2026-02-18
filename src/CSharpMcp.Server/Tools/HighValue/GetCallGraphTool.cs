@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
@@ -7,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
 using Microsoft.CodeAnalysis.FindSymbols;
 
@@ -24,16 +24,20 @@ public class GetCallGraphTool
     /// </summary>
     [McpServerTool, Description("Get call graph for a method showing its callers and callees")]
     public static async Task<string> GetCallGraph(
-        GetCallGraphParams parameters,
+        [Description("Path to the file containing the method")] string filePath,
         IWorkspaceManager workspaceManager,
         ILogger<GetCallGraphTool> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("1-based line number near the method declaration")] int lineNumber = 0,
+        [Description("The name of the method to analyze")] string? symbolName = null,
+        [Description("Maximum number of callers to display")] int maxCallers = 20,
+        [Description("Maximum number of callees to display")] int maxCallees = 10)
     {
         try
         {
-            if (parameters == null)
+            if (string.IsNullOrWhiteSpace(filePath))
             {
-                throw new ArgumentNullException(nameof(parameters));
+                throw new ArgumentException("File path is required", nameof(filePath));
             }
 
             // Check workspace state
@@ -44,29 +48,26 @@ public class GetCallGraphTool
             }
 
             logger.LogInformation("Getting call graph: {FilePath}:{LineNumber} - {SymbolName}",
-                parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                filePath, lineNumber, symbolName);
 
             // Resolve the method symbol
-            var symbol = await parameters.FindSymbolAsync(
-                workspaceManager,
-                SymbolFilter.Member,
-                cancellationToken);
+            var symbol = await ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Member, cancellationToken);
             if (symbol == null)
             {
-                logger.LogWarning("Method not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
+                logger.LogWarning("Method not found: {SymbolName}", symbolName ?? "at specified location");
+                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
             }
 
             if (symbol is not IMethodSymbol method)
             {
                 logger.LogWarning("Symbol is not a method: {SymbolName}", symbol.Name);
-                return GetNotAMethodHelpResponse(symbol.Name, symbol.Kind.ToString(), parameters.FilePath, parameters.LineNumber);
+                return GetNotAMethodHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
             }
 
             var solution = workspaceManager.GetCurrentSolution();
 
             // Build Markdown directly
-            return await method.GetCallGraphMarkdown(solution, parameters.MaxCaller, parameters.MaxCallee, cancellationToken);
+            return await method.GetCallGraphMarkdown(solution, maxCallers, maxCallees, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -81,7 +82,7 @@ public class GetCallGraphTool
             "Get Call Graph",
             message,
             "GetCallGraph(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line where method is declared\n    symbolName: \"MyMethod\"\n)",
-            "- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCaller: 50, maxCallee: 20)`"
+            "- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCallers: 50, maxCallees: 20)`"
         );
     }
 
@@ -112,8 +113,7 @@ public class GetCallGraphTool
         sb.AppendLine("```");
         sb.AppendLine("GetCallGraph(");
         sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42,  // Line where method is declared");
-        sb.AppendLine("    direction: 1  // 1=callers, 2=callees, 0=both");
+        sb.AppendLine("    lineNumber: 42  // Line where method is declared");
         sb.AppendLine(")");
         sb.AppendLine("```");
         sb.AppendLine();
@@ -138,11 +138,42 @@ public class GetCallGraphTool
         sb.AppendLine("- Ensure the line number points to a method declaration");
         sb.AppendLine("- Properties, fields, and other members don't have call graphs");
         sb.AppendLine();
-        sb.AppendLine("**Direction Values**:");
-        sb.AppendLine("- `0` = Both (callers and callees)");
-        sb.AppendLine("- `1` = In (callers only)");
-        sb.AppendLine("- `2` = Out (callees only)");
-        sb.AppendLine();
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Resolve a single symbol from file location info
+    /// </summary>
+    private static async Task<ISymbol?> ResolveSymbolAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+    }
+
+    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+        IEnumerable<ISymbol> symbols,
+        string filePath,
+        int lineNumber)
+    {
+        var filename = System.IO.Path.GetFileName(filePath)?.ToLowerInvariant();
+        return symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - lineNumber)));
     }
 }
