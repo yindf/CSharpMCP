@@ -112,23 +112,12 @@ public class GetDiagnosticsTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("## Get Diagnostics - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GetDiagnostics()");
-        sb.AppendLine("GetDiagnostics(filePath: \"path/to/File.cs\")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetDiagnostics()` - Get all workspace diagnostics");
-        sb.AppendLine("- `GetDiagnostics(filePath: \"C:/MyProject/Program.cs\", includeWarnings: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Get Diagnostics",
+            message,
+            "GetDiagnostics()\nGetDiagnostics(filePath: \"path/to/File.cs\")",
+            "- `GetDiagnostics()` - Get all workspace diagnostics\n- `GetDiagnostics(filePath: \"C:/MyProject/Program.cs\", includeWarnings: true)`"
+        );
     }
 
     private static async Task<List<DiagnosticItem>> ProcessDocumentAsync(
@@ -150,30 +139,45 @@ public class GetDiagnosticsTool
         var compilation = semanticModel.Compilation;
         var compilationDiagnostics = compilation.GetDiagnostics(cancellationToken);
 
-        foreach (var diagnostic in compilationDiagnostics)
+        diagnostics.AddRange(ProcessDiagnostics(compilationDiagnostics, document, parameters, filesWithDiagnostics));
+
+        // Get syntactic diagnostics
+        var syntaxRoot = await document.GetSyntaxRootAsync(cancellationToken);
+        if (syntaxRoot != null)
+        {
+            var syntaxDiagnostics = syntaxRoot.GetDiagnostics();
+            diagnostics.AddRange(ProcessDiagnostics(syntaxDiagnostics, document, parameters, filesWithDiagnostics));
+        }
+
+        return diagnostics;
+    }
+
+    private static List<DiagnosticItem> ProcessDiagnostics(
+        IEnumerable<Microsoft.CodeAnalysis.Diagnostic> diagnostics,
+        Document document,
+        GetDiagnosticsParams parameters,
+        HashSet<string> filesWithDiagnostics)
+    {
+        var result = new List<DiagnosticItem>();
+
+        foreach (var diagnostic in diagnostics)
         {
             if (!ShouldIncludeDiagnostic(diagnostic, parameters))
-            {
                 continue;
-            }
 
             if (diagnostic.Location.SourceTree == null)
-            {
                 continue;
-            }
 
             var filePath = diagnostic.Location.SourceTree.FilePath;
             if (!filePath.Equals(document.FilePath, StringComparison.OrdinalIgnoreCase))
-            {
                 continue;
-            }
 
             var lineSpan = diagnostic.Location.GetLineSpan();
             var severity = GetSeverity(diagnostic.Severity);
 
             filesWithDiagnostics.Add(filePath);
 
-            diagnostics.Add(new DiagnosticItem(
+            result.Add(new DiagnosticItem(
                 Id: diagnostic.Id,
                 Message: diagnostic.GetMessage(),
                 Severity: severity,
@@ -186,50 +190,7 @@ public class GetDiagnosticsTool
             ));
         }
 
-        // Get syntactic diagnostics
-        var syntaxRoot = await document.GetSyntaxRootAsync(cancellationToken);
-        if (syntaxRoot != null)
-        {
-            var syntaxDiagnostics = syntaxRoot.GetDiagnostics();
-
-            foreach (var diagnostic in syntaxDiagnostics)
-            {
-                if (!ShouldIncludeDiagnostic(diagnostic, parameters))
-                {
-                    continue;
-                }
-
-                if (diagnostic.Location.SourceTree == null)
-                {
-                    continue;
-                }
-
-                var filePath = diagnostic.Location.SourceTree.FilePath;
-                if (!filePath.Equals(document.FilePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var lineSpan = diagnostic.Location.GetLineSpan();
-                var severity = GetSeverity(diagnostic.Severity);
-
-                filesWithDiagnostics.Add(filePath);
-
-                diagnostics.Add(new DiagnosticItem(
-                    Id: diagnostic.Id,
-                    Message: diagnostic.GetMessage(),
-                    Severity: severity,
-                    FilePath: filePath,
-                    StartLine: lineSpan.StartLinePosition.Line + 1,
-                    EndLine: lineSpan.EndLinePosition.Line + 1,
-                    StartColumn: lineSpan.StartLinePosition.Character + 1,
-                    EndColumn: lineSpan.EndLinePosition.Character + 1,
-                    Category: diagnostic.Descriptor.Category
-                ));
-            }
-        }
-
-        return diagnostics;
+        return result;
     }
 
     private static bool ShouldIncludeDiagnostic(Microsoft.CodeAnalysis.Diagnostic diagnostic, GetDiagnosticsParams parameters)

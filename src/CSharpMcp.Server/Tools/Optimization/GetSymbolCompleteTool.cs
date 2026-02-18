@@ -81,29 +81,12 @@ public class GetSymbolCompleteTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Get Symbol Complete - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GetSymbolComplete(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42,  // Line near the symbol");
-        sb.AppendLine("    symbolName: \"MyMethod\",");
-        sb.AppendLine("    includeReferences: true,");
-        sb.AppendLine("    includeInheritance: false,");
-        sb.AppendLine("    includeCallGraph: false");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetSymbolComplete(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`");
-        sb.AppendLine("- `GetSymbolComplete(filePath: \"./Models.cs\", lineNumber: 42, symbolName: \"User\", includeReferences: true, includeInheritance: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Get Symbol Complete",
+            message,
+            "GetSymbolComplete(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line near the symbol\n    symbolName: \"MyMethod\",\n    includeReferences: true,\n    includeInheritance: false,\n    includeCallGraph: false\n)",
+            "- `GetSymbolComplete(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetSymbolComplete(filePath: \"./Models.cs\", lineNumber: 42, symbolName: \"User\", includeReferences: true, includeInheritance: true)`"
+        );
     }
 
     private static async Task<string> BuildCompleteMarkdownAsync(
@@ -241,7 +224,7 @@ public class GetSymbolCompleteTool
                             var refLine = refLineSpan.StartLinePosition.Line + 1;
 
                             // Extract line text for context
-                            var lineText = await ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
+                            var lineText = await MarkdownHelper.ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
 
                             sb.AppendLine($"- `{refFileName}:{refLine}`");
                             if (!string.IsNullOrEmpty(lineText))
@@ -333,25 +316,4 @@ public class GetSymbolCompleteTool
         return sb.ToString();
     }
 
-    private static async Task<string?> ExtractLineTextAsync(
-        Document document,
-        int lineNumber,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var sourceText = await document.GetTextAsync(cancellationToken);
-            var lines = sourceText.Lines;
-
-            if (lineNumber < 1 || lineNumber > lines.Count)
-                return null;
-
-            var lineIndex = lineNumber - 1;
-            return lines[lineIndex].ToString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }

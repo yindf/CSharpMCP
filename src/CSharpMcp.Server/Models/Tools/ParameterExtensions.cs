@@ -12,22 +12,22 @@ public static class ParameterExtensions
         parameters.MaxResults > 0 ? parameters.MaxResults : 100;
 
     /// <summary>
-    /// Gets the body max lines value, ensuring a sensible default
+    /// Gets the body max lines value, considering IncludeBody flag
     /// </summary>
     public static int GetBodyMaxLines(this GetSymbolsParams parameters) =>
-        parameters.BodyMaxLines > 0 ? parameters.BodyMaxLines : 100;
+        parameters.IncludeBody ? parameters.BodyMaxLines : 0;
 
     public static int GetBodyMaxLines(this GoToDefinitionParams parameters) =>
-        parameters.BodyMaxLines > 0 ? parameters.BodyMaxLines : 100;
+        parameters.IncludeBody ? parameters.BodyMaxLines : 0;
 
     public static int GetBodyMaxLines(this ResolveSymbolParams parameters) =>
-        parameters.BodyMaxLines > 0 ? parameters.BodyMaxLines : 50;
+        parameters.IncludeBody ? parameters.BodyMaxLines : 0;
 
     public static int GetBodyMaxLines(this GetSymbolCompleteParams parameters) =>
-        parameters.BodyMaxLines > 0 ? parameters.BodyMaxLines : 100;
+        parameters.BodyMaxLines;
 
     public static int GetBodyMaxLines(this BatchGetSymbolsParams parameters) =>
-        parameters.BodyMaxLines > 0 ? parameters.BodyMaxLines : 50;
+        parameters.IncludeBody ? parameters.BodyMaxLines : 0;
 
     public static int GetMaxDerivedDepth(this GetInheritanceHierarchyParams parameters) =>
         parameters.MaxDerivedDepth > 0 ? parameters.MaxDerivedDepth : 3;

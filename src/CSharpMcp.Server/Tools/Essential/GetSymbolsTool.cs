@@ -112,11 +112,8 @@ public class GetSymbolsTool
         sb.AppendLine($"**Total: {symbols.Count} symbol{(symbols.Count != 1 ? "s" : "")}**");
         sb.AppendLine();
 
-        foreach (var symbol in symbols)
+        foreach (var symbol in symbols.Where(s => !s.IsImplicitlyDeclared))
         {
-            if (symbol.IsImplicitlyDeclared)
-                continue;
-
             var displayName = symbol.GetDisplayName();
             var (startLine, endLine) = symbol.GetLineRange();
             var kind = symbol.GetDisplayKind();

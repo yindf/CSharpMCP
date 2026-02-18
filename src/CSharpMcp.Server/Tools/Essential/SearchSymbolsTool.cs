@@ -57,6 +57,8 @@ public class SearchSymbolsTool
             var skippedCount = 0;
             var errorCount = 0;
             var results = new List<ISymbol>();
+
+            // Try exact search first, then pattern search if no results
             var symbols = await workspaceManager.SearchSymbolsAsync(parameters.Query,
                 SymbolFilter.TypeAndMember, cancellationToken);
             if (!symbols.Any())
@@ -77,10 +79,7 @@ public class SearchSymbolsTool
                         continue;
                     }
 
-                    // Get the first source location
-                    var location = locations[0];
-                    var filePath = location.SourceTree?.FilePath ?? "";
-
+                    var filePath = locations[0].SourceTree?.FilePath ?? "";
                     if (string.IsNullOrEmpty(filePath))
                     {
                         skippedCount++;

@@ -147,14 +147,14 @@ public static class SymbolExtensions
         };
     }
 
-    private static string FormatMethodSignature(IMethodSymbol method)
+    private static string? FormatMethodSignature(IMethodSymbol method)
     {
         // 跳过属性访问器
         if (method.AssociatedSymbol != null && method.MethodKind == MethodKind.PropertyGet)
-            return null!;
+            return null;
 
         var returnType = method.ReturnsVoid ? "void" : method.ReturnType.ToDisplayString();
-        var parameters = string.Join(", ", method.Parameters.ToArray().Select(p => p.ToDisplayString()));
+        var parameters = string.Join(", ", method.Parameters.Select(p => p.ToDisplayString()));
         return $"{returnType} {method.Name}({parameters})";
     }
 
@@ -239,7 +239,8 @@ public static class SymbolExtensions
         return string.IsNullOrEmpty(summary) ? null : summary;
     }
 
-    private static string HtmlDecode(string text) => HttpUtility.HtmlDecode(text);
+    private static string HtmlDecode(string text) =>
+        HttpUtility.HtmlDecode(text);
 
     // ========== 源码信息 ==========
 
@@ -650,18 +651,13 @@ public static class SymbolExtensions
             return symbols;
         }
 
-        var filename = Path.GetFileName(location.FilePath)?.ToLowerInvariant();
-        symbols = symbols.OrderBy(s => s.Locations.Sum(loc =>
-            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
-            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - location.LineNumber)));
-
-        return symbols;
+        return OrderSymbolsByProximity(symbols, location.FilePath, location.LineNumber);
     }
 
     /// <summary>
-    /// Resolve symbol from FileLocationParams
+    /// Find the best matching symbol from FileLocationParams
     /// </summary>
-    public static async Task<ISymbol> FindSymbolAsync(
+    public static async Task<ISymbol?> FindSymbolAsync(
         this FileLocationParams location,
         IWorkspaceManager workspaceManager,
         SymbolFilter filter = SymbolFilter.TypeAndMember,
@@ -678,12 +674,18 @@ public static class SymbolExtensions
             return symbols.FirstOrDefault();
         }
 
-        var filename = Path.GetFileName(location.FilePath)?.ToLowerInvariant();
-        symbols = symbols.OrderBy(s => s.Locations.Sum(loc =>
-            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
-            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - location.LineNumber)));
+        return OrderSymbolsByProximity(symbols, location.FilePath, location.LineNumber).FirstOrDefault();
+    }
 
-        return symbols.FirstOrDefault();
+    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+        IEnumerable<ISymbol> symbols,
+        string filePath,
+        int lineNumber)
+    {
+        var filename = Path.GetFileName(filePath)?.ToLowerInvariant();
+        return symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - lineNumber)));
     }
 
     public static async Task<IEnumerable<ISymbol>> GetDeclaredSymbolsAsync(

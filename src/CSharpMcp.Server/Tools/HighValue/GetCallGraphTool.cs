@@ -77,26 +77,12 @@ public class GetCallGraphTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Get Call Graph - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GetCallGraph(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42,  // Line where method is declared");
-        sb.AppendLine("    symbolName: \"MyMethod\"");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`");
-        sb.AppendLine("- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCaller: 50, maxCallee: 20)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Get Call Graph",
+            message,
+            "GetCallGraph(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line where method is declared\n    symbolName: \"MyMethod\"\n)",
+            "- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCaller: 50, maxCallee: 20)`"
+        );
     }
 
     /// <summary>

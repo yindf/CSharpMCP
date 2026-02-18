@@ -80,35 +80,18 @@ public class GetTypeMembersTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Get Type Members - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GetTypeMembers(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 7,  // Line where class is declared");
-        sb.AppendLine("    symbolName: \"MyClass\"");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetTypeMembers(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`");
-        sb.AppendLine("- `GetTypeMembers(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeInherited: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Get Type Members",
+            message,
+            "GetTypeMembers(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 7,  // Line where class is declared\n    symbolName: \"MyClass\"\n)",
+            "- `GetTypeMembers(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`\n- `GetTypeMembers(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeInherited: true)`"
+        );
     }
 
     private static List<ISymbol> GetMembers(
         INamedTypeSymbol type,
         bool includeInherited)
     {
-        var members = new List<ISymbol>();
-
-        // Get all members
         var allMembers = includeInherited
             ? type.AllInterfaces
                 .Concat(new[] { type })
@@ -116,25 +99,10 @@ public class GetTypeMembersTool
                 .Distinct(SymbolEqualityComparer.Default)
             : type.GetMembers();
 
-        foreach (var member in allMembers)
-        {
-            // Skip implicitly declared members
-            if (member.IsImplicitlyDeclared)
-            {
-                continue;
-            }
-
-            // Skip metadata members
-            var location = member.Locations.FirstOrDefault();
-            if (location?.IsInMetadata == true)
-            {
-                continue;
-            }
-
-            members.Add(member);
-        }
-
-        return members;
+        return allMembers
+            .Where(m => !m.IsImplicitlyDeclared)
+            .Where(m => m.Locations.FirstOrDefault()?.IsInMetadata != true)
+            .ToList();
     }
 
     private static string BuildMembersMarkdown(

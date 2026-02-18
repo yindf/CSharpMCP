@@ -141,26 +141,12 @@ public class BatchGetSymbolsTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Batch Get Symbols - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("BatchGetSymbols(");
-        sb.AppendLine("    symbols: [");
-        sb.AppendLine("        { filePath: \"path/to/File1.cs\", lineNumber: 15, symbolName: \"MyClass\" },");
-        sb.AppendLine("        { filePath: \"path/to/File2.cs\", lineNumber: 42, symbolName: \"MyMethod\" }");
-        sb.AppendLine("    ]");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `BatchGetSymbols(symbols: [{ filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\" }])`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Batch Get Symbols",
+            message,
+            "BatchGetSymbols(\n    symbols: [\n        { filePath: \"path/to/File1.cs\", lineNumber: 15, symbolName: \"MyClass\" },\n        { filePath: \"path/to/File2.cs\", lineNumber: 42, symbolName: \"MyMethod\" }\n    ]\n)",
+            "- `BatchGetSymbols(symbols: [{ filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\" }])`"
+        );
     }
 
     private static string BuildBatchResultsMarkdown(

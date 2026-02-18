@@ -79,26 +79,12 @@ public class GoToDefinitionTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Go To Definition - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GoToDefinition(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42,  // Line near the symbol reference");
-        sb.AppendLine("    symbolName: \"MyMethod\"");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GoToDefinition(filePath: \"C:/MyProject/Program.cs\", lineNumber: 15, symbolName: \"MyMethod\")`");
-        sb.AppendLine("- `GoToDefinition(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeBody: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Go To Definition",
+            message,
+            "GoToDefinition(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line near the symbol reference\n    symbolName: \"MyMethod\"\n)",
+            "- `GoToDefinition(filePath: \"C:/MyProject/Program.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `GoToDefinition(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeBody: true)`"
+        );
     }
 
     private static async Task<string> BuildSymbolMarkdownAsync(
@@ -201,7 +187,7 @@ public class GoToDefinitionTool
                         var refLine = refLineSpan.StartLinePosition.Line + 1;
 
                         // Extract line text
-                        var lineText = await ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
+                        var lineText = await MarkdownHelper.ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
 
                         sb.AppendLine($"- `{refFileName}:{refLine}`");
                         if (!string.IsNullOrEmpty(lineText))
@@ -222,27 +208,6 @@ public class GoToDefinitionTool
         return sb.ToString();
     }
 
-    private static async Task<string?> ExtractLineTextAsync(
-        Document document,
-        int lineNumber,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var sourceText = await document.GetTextAsync(cancellationToken);
-            var lines = sourceText.Lines;
-
-            if (lineNumber < 1 || lineNumber > lines.Count)
-                return null;
-
-            var lineIndex = lineNumber - 1;
-            return lines[lineIndex].ToString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private static async Task<string> BuildErrorDetails(
         ResolveSymbolParams parameters,

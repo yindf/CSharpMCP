@@ -120,16 +120,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
                 {
                     _currentSolution = await _workspace.OpenSolutionAsync(normalizedPath, cancellationToken: cancellationToken);
                     kind = WorkspaceKind.Solution;
-
-                    foreach (var project in _workspace.CurrentSolution.Projects)
-                    {
-                        var symbols = await SymbolFinder.FindDeclarationsAsync(project, "UnityEngine", false, SymbolFilter.Namespace, cancellationToken);
-                        if (symbols.Any())
-                        {
-                            _isUnityProject = true;
-                            break;
-                        }
-                    }
+                    _isUnityProject = await IsUnityProjectAsync(_workspace.CurrentSolution.Projects, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -144,11 +135,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
                     var project = await _workspace.OpenProjectAsync(normalizedPath, cancellationToken: cancellationToken);
                     _currentSolution = project.Solution;
                     kind = WorkspaceKind.Project;
-                    var symbols = await SymbolFinder.FindDeclarationsAsync(project, "UnityEngine", false, SymbolFilter.Namespace, cancellationToken);
-                    if (symbols.Any())
-                    {
-                        _isUnityProject = true;
-                    }
+                    _isUnityProject = await IsUnityProjectAsync(new[] { project }, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -393,54 +380,48 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     {
         if (!_isUnityProject)
         {
-            foreach (var project in _workspace.CurrentSolution.Projects)
-                yield return project;
-
-            yield break;
+            return _workspace.CurrentSolution.Projects;
         }
 
-        foreach (var project in _workspace.CurrentSolution.Projects)
-        {
-            var doc = project.Documents.FirstOrDefault();
-            if (doc == null)
-                continue;
+        return _workspace.CurrentSolution.Projects
+            .Where(p =>
+            {
+                var doc = p.Documents.FirstOrDefault();
+                if (doc == null)
+                    return false;
 
-            if (doc.FilePath?.Contains("Packages", StringComparison.OrdinalIgnoreCase) == true)
-                continue;
+                var filePath = doc.FilePath;
+                if (string.IsNullOrEmpty(filePath))
+                    return false;
 
-            if (doc.FilePath?.Contains("PackageCache", StringComparison.OrdinalIgnoreCase) == true)
-                continue;
+                if (filePath.Contains("Packages", StringComparison.OrdinalIgnoreCase) ||
+                    filePath.Contains("PackageCache", StringComparison.OrdinalIgnoreCase))
+                    return false;
 
-            _logger.LogInformation("[UserProject] Found project {ProjectName}", project.Name);
-
-            yield return project;
-        }
+                _logger.LogInformation("[UserProject] Found project {ProjectName}", p.Name);
+                return true;
+            });
     }
 
     public async Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken)
     {
-        var symbols = Enumerable.Empty<ISymbol>();
+        var symbols = new List<ISymbol>();
         foreach (var project in UserProjects)
         {
             _logger.LogInformation("Searching symbols for project {ProjectName}", project.Name);
-
-            symbols = symbols.Concat(await SymbolFinder.FindSourceDeclarationsWithPatternAsync(project, query, filter, cancellationToken));
+            symbols.AddRange(await SymbolFinder.FindSourceDeclarationsWithPatternAsync(project, query, filter, cancellationToken));
         }
-
         return symbols;
     }
 
     public async Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken)
     {
-        var symbols = Enumerable.Empty<ISymbol>();
+        var symbols = new List<ISymbol>();
         foreach (var project in UserProjects)
         {
             _logger.LogInformation("Searching symbols for project {ProjectName}", project.Name);
-
-            symbols = symbols.Concat(await SymbolFinder.FindSourceDeclarationsAsync(project, query, true,
-                filter, cancellationToken));
+            symbols.AddRange(await SymbolFinder.FindSourceDeclarationsAsync(project, query, true, filter, cancellationToken));
         }
-
         return symbols;
     }
 
@@ -483,6 +464,19 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// 获取工作区是否已加载
     /// </summary>
     public bool IsWorkspaceLoaded => _currentSolution != null;
+
+    private static async Task<bool> IsUnityProjectAsync(IEnumerable<Project> projects, CancellationToken cancellationToken)
+    {
+        foreach (var project in projects)
+        {
+            var symbols = await SymbolFinder.FindDeclarationsAsync(project, "UnityEngine", false, SymbolFilter.Namespace, cancellationToken);
+            if (symbols.Any())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public void Dispose()
     {

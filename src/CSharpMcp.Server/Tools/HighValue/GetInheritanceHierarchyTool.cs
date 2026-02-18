@@ -91,26 +91,12 @@ public class GetInheritanceHierarchyTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Get Inheritance Hierarchy - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("GetInheritanceHierarchy(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 7,  // Line where class is declared");
-        sb.AppendLine("    symbolName: \"MyClass\"");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `GetInheritanceHierarchy(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`");
-        sb.AppendLine("- `GetInheritanceHierarchy(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeDerived: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Get Inheritance Hierarchy",
+            message,
+            "GetInheritanceHierarchy(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 7,  // Line where class is declared\n    symbolName: \"MyClass\"\n)",
+            "- `GetInheritanceHierarchy(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`\n- `GetInheritanceHierarchy(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeDerived: true)`"
+        );
     }
 
     private static string BuildHierarchyMarkdown(
@@ -136,15 +122,8 @@ public class GetInheritanceHierarchyTool
             sb.AppendLine();
             foreach (var baseType in tree.BaseTypes)
             {
-                var (startLine, endLine) = baseType.GetLineRange();
-                var filePath = baseType.GetFilePath();
                 sb.AppendLine($"- **{baseType.ToDisplayString()}**");
-                // 只在有有效文件路径时才显示位置信息
-                if (startLine > 0 && !string.IsNullOrEmpty(filePath))
-                {
-                    var fileName = System.IO.Path.GetFileName(filePath);
-                    sb.AppendLine($"  - `{fileName}:{startLine}`");
-                }
+                AppendLocationIfExists(sb, baseType);
             }
             sb.AppendLine();
         }
@@ -156,15 +135,8 @@ public class GetInheritanceHierarchyTool
             sb.AppendLine();
             foreach (var iface in tree.Interfaces)
             {
-                var (startLine, endLine) = iface.GetLineRange();
-                var filePath = iface.GetFilePath();
                 sb.AppendLine($"- **{iface.ToDisplayString()}**");
-                // 只在有有效文件路径时才显示位置信息
-                if (startLine > 0 && !string.IsNullOrEmpty(filePath))
-                {
-                    var fileName = System.IO.Path.GetFileName(filePath);
-                    sb.AppendLine($"  - `{fileName}:{startLine}`");
-                }
+                AppendLocationIfExists(sb, iface);
             }
             sb.AppendLine();
         }
@@ -176,15 +148,8 @@ public class GetInheritanceHierarchyTool
             sb.AppendLine();
             foreach (var derived in tree.DerivedTypes)
             {
-                var (startLine, endLine) = derived.GetLineRange();
-                var filePath = derived.GetFilePath();
                 sb.AppendLine($"- **{derived.ToDisplayString()}**");
-                // 只在有有效文件路径时才显示位置信息
-                if (startLine > 0 && !string.IsNullOrEmpty(filePath))
-                {
-                    var fileName = System.IO.Path.GetFileName(filePath);
-                    sb.AppendLine($"  - `{fileName}:{startLine}`");
-                }
+                AppendLocationIfExists(sb, derived);
             }
             sb.AppendLine();
         }
@@ -244,5 +209,16 @@ public class GetInheritanceHierarchyTool
         sb.AppendLine("- Ensure the line number points to a type declaration (not a method, property, etc.)");
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    private static void AppendLocationIfExists(StringBuilder sb, ISymbol symbol)
+    {
+        var (startLine, _) = symbol.GetLineRange();
+        var filePath = symbol.GetFilePath();
+        if (startLine > 0 && !string.IsNullOrEmpty(filePath))
+        {
+            var fileName = System.IO.Path.GetFileName(filePath);
+            sb.AppendLine($"  - `{fileName}:{startLine}`");
+        }
     }
 }

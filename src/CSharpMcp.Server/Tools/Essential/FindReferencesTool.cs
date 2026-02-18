@@ -82,26 +82,12 @@ public class FindReferencesTool
 
     private static string GetErrorHelpResponse(string message)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Find References - Failed");
-        sb.AppendLine();
-        sb.AppendLine(message);
-        sb.AppendLine();
-        sb.AppendLine("**Usage:**");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("FindReferences(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42,  // Line near the symbol declaration");
-        sb.AppendLine("    symbolName: \"MyMethod\"");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("**Examples:**");
-        sb.AppendLine("- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`");
-        sb.AppendLine("- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeContext: true)`");
-        sb.AppendLine();
-        return sb.ToString();
+        return MarkdownHelper.BuildErrorResponse(
+            "Find References",
+            message,
+            "FindReferences(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line near the symbol declaration\n    symbolName: \"MyMethod\"\n)",
+            "- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeContext: true)`"
+        );
     }
 
     private static async Task<string> BuildReferencesMarkdownAsync(
@@ -140,7 +126,7 @@ public class FindReferencesTool
                 var endLine = lineSpan.EndLinePosition.Line + 1;
 
                 // Extract line text
-                var lineText = await ExtractLineTextAsync(refLoc.ReferenceLocation.Document, startLine, cancellationToken);
+                var lineText = await MarkdownHelper.ExtractLineTextAsync(refLoc.ReferenceLocation.Document, startLine, cancellationToken);
 
                 var lineRange = endLine > startLine ? $"L{startLine}-{endLine}" : $"L{startLine}";
                 sb.AppendLine($"- {lineRange}: {lineText?.Trim() ?? ""}");
@@ -168,27 +154,6 @@ public class FindReferencesTool
         return location.Location.GetLineSpan().StartLinePosition.Line + 1;
     }
 
-    private static async Task<string?> ExtractLineTextAsync(
-        Document document,
-        int lineNumber,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var sourceText = await document.GetTextAsync(cancellationToken);
-            var lines = sourceText.Lines;
-
-            if (lineNumber < 1 || lineNumber > lines.Count)
-                return null;
-
-            var lineIndex = lineNumber - 1;
-            return lines[lineIndex].ToString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private static string BuildErrorDetails(
         FindReferencesParams parameters,
