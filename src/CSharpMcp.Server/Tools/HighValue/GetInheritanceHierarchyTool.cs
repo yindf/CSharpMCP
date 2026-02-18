@@ -35,11 +35,11 @@ public class GetInheritanceHierarchyTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the type symbol
-            var symbol = await parameters.ResolveSymbolAsync(
+            var symbol = await parameters.FindSymbolAsync(
                 workspaceManager,
                 SymbolFilter.Type,
                 cancellationToken);
@@ -69,7 +69,7 @@ public class GetInheritanceHierarchyTool
                 maxDepth,
                 cancellationToken);
 
-            logger.LogDebug("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
+            logger.LogInformation("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
 
             // Build Markdown directly
             return BuildHierarchyMarkdown(type, tree, parameters);

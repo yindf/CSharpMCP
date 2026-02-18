@@ -49,7 +49,15 @@ public class SearchSymbolsTool
             var skippedCount = 0;
             var errorCount = 0;
             var results = new List<ISymbol>();
-            foreach (var symbol in (await workspaceManager.SearchSymbolsAsync(parameters.Query)).Take(maxResults))
+            var symbols = await workspaceManager.SearchSymbolsAsync(parameters.Query,
+                SymbolFilter.TypeAndMember, cancellationToken);
+            if (!symbols.Any())
+            {
+                symbols = await workspaceManager.SearchSymbolsWithPatternAsync(parameters.Query,
+                    SymbolFilter.TypeAndMember, cancellationToken);
+            }
+
+            foreach (var symbol in symbols.Take(maxResults))
             {
                 try
                 {

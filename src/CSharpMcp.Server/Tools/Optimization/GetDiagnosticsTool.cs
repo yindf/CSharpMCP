@@ -37,7 +37,7 @@ public class GetDiagnosticsTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Getting diagnostics for: {FilePath}", parameters.FilePath ?? "entire workspace");
+            logger.LogInformation("Getting diagnostics for: {FilePath}", parameters.FilePath ?? "entire workspace");
 
             var diagnostics = new List<DiagnosticItem>();
             var filesWithDiagnostics = new HashSet<string>();
@@ -90,7 +90,7 @@ public class GetDiagnosticsTool
                 FilesWithDiagnostics: filesWithDiagnostics.Count
             );
 
-            logger.LogDebug("Retrieved {Count} diagnostics: {Errors} errors, {Warnings} warnings",
+            logger.LogInformation("Retrieved {Count} diagnostics: {Errors} errors, {Warnings} warnings",
                 diagnostics.Count, totalErrors, totalWarnings);
 
             return new GetDiagnosticsResponse(summary, diagnostics).ToMarkdown();

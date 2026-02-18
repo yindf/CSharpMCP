@@ -19,6 +19,8 @@ if not errorlevel 1 (
 )
 echo.
 
+rmdir /S /Q %OUTPUT_DIR% 2>NUL
+
 echo Publishing CSharpMcp.Server for Windows x64...
 echo.
 

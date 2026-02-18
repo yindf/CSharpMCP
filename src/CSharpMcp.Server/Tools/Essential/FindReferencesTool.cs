@@ -39,11 +39,11 @@ public class FindReferencesTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // First, resolve the symbol
-            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await parameters.FindSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
             if (symbol == null)
             {
                 var errorDetails = BuildErrorDetails(parameters, workspaceManager, cancellationToken);
@@ -60,7 +60,7 @@ public class FindReferencesTool
                 solution,
                 cancellationToken)).ToImmutableList();
 
-            logger.LogDebug("Found {Count} references for {SymbolName}", referencedSymbols.Count, symbol.Name);
+            logger.LogInformation("Found {Count} references for {SymbolName}", referencedSymbols.Count, symbol.Name);
 
             // Build Markdown directly
             return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, cancellationToken);
@@ -96,7 +96,7 @@ public class FindReferencesTool
 
         foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
         {
-            var fileName = System.IO.Path.GetFileName(fileGroup.Key);
+            var fileName = Path.GetFileName(fileGroup.Key);
             sb.AppendLine($"### {fileName}");
             sb.AppendLine();
 

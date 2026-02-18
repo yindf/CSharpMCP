@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -21,7 +22,7 @@ public class GetCallGraphTool
     /// <summary>
     /// Get the call graph for a method showing callers and callees
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("get call graph, will at most show MaxCaller callers and MaxCallee callees.")]
     public static async Task<string> GetCallGraph(
         GetCallGraphParams parameters,
         IWorkspaceManager workspaceManager,
@@ -35,11 +36,11 @@ public class GetCallGraphTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Getting call graph: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Getting call graph: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the method symbol
-            var symbol = await parameters.ResolveSymbolAsync(
+            var symbol = await parameters.FindSymbolAsync(
                 workspaceManager,
                 SymbolFilter.Member,
                 cancellationToken);
@@ -58,7 +59,7 @@ public class GetCallGraphTool
             var solution = workspaceManager.GetCurrentSolution();
 
             // Build Markdown directly
-            return await method.GetCallGraphMarkdown(solution, cancellationToken);
+            return await method.GetCallGraphMarkdown(solution, parameters.MaxCaller, parameters.MaxCallee, cancellationToken);
         }
         catch (Exception ex)
         {

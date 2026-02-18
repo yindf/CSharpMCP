@@ -35,11 +35,11 @@ public class GetTypeMembersTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the type symbol
-            var symbol = await parameters.ResolveSymbolAsync(
+            var symbol = await parameters.FindSymbolAsync(
                 workspaceManager,
                 SymbolFilter.Type,
                 cancellationToken);
@@ -58,7 +58,7 @@ public class GetTypeMembersTool
             // Get all members as ISymbol
             var members = GetMembers(type, parameters.IncludeInherited);
 
-            logger.LogDebug("Retrieved {Count} members for: {TypeName}", members.Count, type.Name);
+            logger.LogInformation("Retrieved {Count} members for: {TypeName}", members.Count, type.Name);
 
             // Build Markdown directly
             return BuildMembersMarkdown(type, members, parameters);
@@ -129,6 +129,9 @@ public class GetTypeMembersTool
 
             foreach (var member in kindGroup.OrderBy(m => m.GetDisplayName()))
             {
+                if (member.IsImplicitlyDeclared)
+                    continue;
+
                 var displayName = member.GetDisplayName();
                 var (startLine, endLine) = member.GetLineRange();
                 var displayKind = member.GetDisplayKind();

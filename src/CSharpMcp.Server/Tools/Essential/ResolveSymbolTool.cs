@@ -19,16 +19,16 @@ namespace CSharpMcp.Server.Tools.Essential;
 /// resolve_symbol 工具 - 获取符号的完整信息
 /// </summary>
 [McpServerToolType]
-public class ResolveSymbolTool
+public class GoToDefinitionTool
 {
     /// <summary>
     /// Get comprehensive symbol information including documentation, comments, and context
     /// </summary>
     [McpServerTool]
-    public static async Task<string> ResolveSymbol(
+    public static async Task<string> GoToDefinition(
         ResolveSymbolParams parameters,
         IWorkspaceManager workspaceManager,
-        ILogger<ResolveSymbolTool> logger,
+        ILogger<GoToDefinitionTool> logger,
         CancellationToken cancellationToken)
     {
         try
@@ -38,12 +38,12 @@ public class ResolveSymbolTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Resolving symbol: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Resolving symbol: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the symbol
-            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
-            if (symbol == null)
+            var symbols = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+            if (symbols == null)
             {
                 var errorDetails = await BuildErrorDetails(parameters, workspaceManager, cancellationToken);
                 logger.LogWarning("Symbol not found: {Details}", errorDetails);
@@ -51,11 +51,16 @@ public class ResolveSymbolTool
             }
 
             // Build Markdown directly
-            var result = await BuildSymbolMarkdownAsync(symbol, parameters, workspaceManager.GetCurrentSolution(), cancellationToken);
+            StringBuilder sb = new StringBuilder();
+            foreach (var symbol in symbols)
+            {
+                var result = await BuildSymbolMarkdownAsync(symbol, parameters, workspaceManager.GetCurrentSolution(), cancellationToken);
+                sb.AppendLine(result);
 
-            logger.LogDebug("Resolved symbol: {SymbolName}", symbol.Name);
+                logger.LogInformation("Resolved symbol: {SymbolName}", symbol.Name);
+            }
 
-            return result;
+            return sb.ToString();
         }
         catch (Exception ex)
         {

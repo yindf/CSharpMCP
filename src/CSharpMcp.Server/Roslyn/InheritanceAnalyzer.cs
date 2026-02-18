@@ -29,7 +29,7 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         int maxDerivedDepth,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogDebug("Getting inheritance tree for: {TypeName}, includeDerived={IncludeDerived}, maxDepth={MaxDepth}",
+        _logger.LogInformation("Getting inheritance tree for: {TypeName}, includeDerived={IncludeDerived}, maxDepth={MaxDepth}",
             type.ToDisplayString(), includeDerived, maxDerivedDepth);
 
         // Get base types
@@ -61,7 +61,7 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
 
         var depth = includeDerived ? maxDerivedDepth : 0;
 
-        _logger.LogDebug(
+        _logger.LogInformation(
             "Inheritance tree for {TypeName}: {BaseCount} base types, {InterfaceCount} interfaces, {DerivedCount} derived types",
             type.ToDisplayString(), baseTypes.Count, interfaces.Count,
             derivedTypes?.Count ?? 0);
@@ -80,7 +80,7 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         Solution solution,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogDebug("Finding derived types for: {TypeName} (Kind: {TypeKind})",
+        _logger.LogInformation("Finding derived types for: {TypeName} (Kind: {TypeKind})",
             type.ToDisplayString(), type.TypeKind);
 
         IReadOnlyList<INamedTypeSymbol> derivedTypes;
@@ -100,7 +100,7 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
             derivedTypes = derived.ToList();
         }
 
-        _logger.LogDebug("Found {Count} derived types for {TypeName}",
+        _logger.LogInformation("Found {Count} derived types for {TypeName}",
             derivedTypes.Count, type.ToDisplayString());
 
         return derivedTypes;
@@ -129,12 +129,12 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         int currentDepth,
         CancellationToken cancellationToken)
     {
-        _logger.LogDebug("CollectDerivedTypesBfsAsync: currentDepth={CurrentDepth}, maxDepth={MaxDepth}, currentLevelCount={Count}",
+        _logger.LogInformation("CollectDerivedTypesBfsAsync: currentDepth={CurrentDepth}, maxDepth={MaxDepth}, currentLevelCount={Count}",
             currentDepth, maxDepth, currentLevel.Count);
 
         if (currentLevel.Count == 0)
         {
-            _logger.LogDebug("CollectDerivedTypesBfsAsync: returning early (no types)");
+            _logger.LogInformation("CollectDerivedTypesBfsAsync: returning early (no types)");
             return;
         }
 
@@ -144,12 +144,12 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         {
             if (collected.Contains(type))
             {
-                _logger.LogDebug("CollectDerivedTypesBfsAsync: skipping {TypeName} (already collected)", type.Name);
+                _logger.LogInformation("CollectDerivedTypesBfsAsync: skipping {TypeName} (already collected)", type.Name);
                 continue;
             }
 
             collected.Add(type);
-            _logger.LogDebug("CollectDerivedTypesBfsAsync: added {TypeName} to collected set (total: {Count})",
+            _logger.LogInformation("CollectDerivedTypesBfsAsync: added {TypeName} to collected set (total: {Count})",
                 type.Name, collected.Count);
 
             // Only find deeper derived types if we haven't reached max depth
@@ -159,13 +159,13 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
             {
                 // Find types that derive from this type
                 var derived = await FindDerivedTypesAsync(type, solution, cancellationToken);
-                _logger.LogDebug("CollectDerivedTypesBfsAsync: found {Count} derived types for {TypeName}",
+                _logger.LogInformation("CollectDerivedTypesBfsAsync: found {Count} derived types for {TypeName}",
                     derived.Count, type.Name);
                 nextLevel.AddRange(derived);
             }
             else
             {
-                _logger.LogDebug("CollectDerivedTypesBfsAsync: reached maxDepth {MaxDepth}, not finding deeper types for {TypeName}",
+                _logger.LogInformation("CollectDerivedTypesBfsAsync: reached maxDepth {MaxDepth}, not finding deeper types for {TypeName}",
                     maxDepth, type.Name);
             }
         }

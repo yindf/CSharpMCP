@@ -40,11 +40,11 @@ public class GetSymbolCompleteTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
+            logger.LogInformation("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the symbol
-            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await parameters.FindSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
             if (symbol == null)
             {
                 logger.LogWarning("Symbol not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
@@ -60,7 +60,7 @@ public class GetSymbolCompleteTool
                 logger,
                 cancellationToken);
 
-            logger.LogDebug("Retrieved complete symbol info for: {SymbolName}", symbol.Name);
+            logger.LogInformation("Retrieved complete symbol info for: {SymbolName}", symbol.Name);
 
             return result;
         }
@@ -272,7 +272,7 @@ public class GetSymbolCompleteTool
             {
                 try
                 {
-                    sb.Append(await method.GetCallGraphMarkdown(solution, cancellationToken));
+                    sb.Append(await method.GetCallGraphMarkdown(solution, 10, 10, cancellationToken));
                 }
                 catch (Exception ex)
                 {

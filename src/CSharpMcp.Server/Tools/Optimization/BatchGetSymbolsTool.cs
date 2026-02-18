@@ -37,7 +37,7 @@ public class BatchGetSymbolsTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
-            logger.LogDebug("Batch getting {Count} symbols", parameters.Symbols.Count);
+            logger.LogInformation("Batch getting {Count} symbols", parameters.Symbols.Count);
 
             // Use a semaphore to limit concurrency
             var semaphore = new SemaphoreSlim(5);
@@ -50,7 +50,7 @@ public class BatchGetSymbolsTool
                     await semaphore.WaitAsync(cancellationToken);
                     try
                     {
-                        var symbol = await symbolParams.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+                        var symbol = await symbolParams.FindSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
                         if (symbol == null)
                         {
                             return new SymbolBatchResult(
@@ -100,7 +100,7 @@ public class BatchGetSymbolsTool
             var successCount = results.Count(r => r.Error == null);
             var errorCount = results.Count(r => r.Error != null);
 
-            logger.LogDebug("Batch query completed: {Success} succeeded, {Errors} failed",
+            logger.LogInformation("Batch query completed: {Success} succeeded, {Errors} failed",
                 successCount, errorCount);
 
             // Build Markdown directly

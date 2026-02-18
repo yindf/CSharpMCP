@@ -2,6 +2,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -270,43 +271,6 @@ public static class SymbolExtensions
         return text;
     }
 
-    public static async Task<IReadOnlyList<ISymbol>> SearchSymbolsAsync(this string query)
-    {
-        return new List<ISymbol>();
-    }
-
-    /// <summary>
-    /// 获取方法体的代码
-    /// </summary>
-    public static async Task<string?> GetBodyAsync(
-        this ISymbol symbol,
-        int? maxLines = null,
-        CancellationToken cancellationToken = default)
-    {
-        if (symbol is not IMethodSymbol) return null;
-
-        var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return null;
-
-        var syntax = await syntaxRef.GetSyntaxAsync(cancellationToken);
-        if (syntax is not Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
-            return null;
-
-        var body = methodSyntax.Body?.ToString();
-        if (string.IsNullOrEmpty(body)) return null;
-
-        if (maxLines.HasValue && maxLines.Value > 0)
-        {
-            var lines = body.Split('\n');
-            if (lines.Length > maxLines.Value)
-            {
-                body = string.Join('\n', lines.Take(maxLines.Value));
-            }
-        }
-
-        return body;
-    }
-
     // ========== 类型信息 ==========
 
     /// <summary>
@@ -321,36 +285,6 @@ public static class SymbolExtensions
     public static string? GetNamespace(this ISymbol symbol) =>
         symbol.ContainingNamespace?.ToString();
 
-    /// <summary>
-    /// 获取基类型名称
-    /// </summary>
-    public static string? GetBaseType(this INamedTypeSymbol type) =>
-        type.BaseType?.ToDisplayString();
-
-    /// <summary>
-    /// 获取实现的接口列表
-    /// </summary>
-    public static IEnumerable<string> GetInterfaces(this INamedTypeSymbol type) =>
-        type.AllInterfaces.Select(i => i.ToDisplayString());
-
-    /// <summary>
-    /// 获取类型的所有成员
-    /// </summary>
-    public static IEnumerable<ISymbol> GetMembers(this INamedTypeSymbol type) =>
-        type.GetMembers().Where(m => !m.IsImplicitlyDeclared);
-
-    // ========== 引用查找 ==========
-
-    /// <summary>
-    /// 查找符号的所有引用
-    /// </summary>
-    public static async Task<IEnumerable<ReferencedSymbol>> FindReferencesAsync(
-        this ISymbol symbol,
-        Solution solution,
-        CancellationToken cancellationToken = default)
-    {
-        return await SymbolFinder.FindReferencesAsync(symbol, solution, cancellationToken);
-    }
 
     // ========== 辅助方法 ==========
 
@@ -378,14 +312,6 @@ public static class SymbolExtensions
     public static string GetAccessibilityString(this ISymbol symbol)
     {
         return symbol.DeclaredAccessibility.ToString().ToLower();
-    }
-
-    /// <summary>
-    /// 获取符号类型字符串
-    /// </summary>
-    public static string GetKindString(this ISymbol symbol)
-    {
-        return symbol.Kind.ToString();
     }
 
     /// <summary>
@@ -463,46 +389,9 @@ public static class SymbolExtensions
         }
     }
 
-    /// <summary>
-    /// 判断是否为构造函数
-    /// </summary>
-    public static bool IsConstructor(this ISymbol symbol)
-    {
-        return symbol is IMethodSymbol method && method.MethodKind == MethodKind.Constructor;
-    }
-
-    /// <summary>
-    /// 获取方法签名详细信息
-    /// </summary>
-    public static (string? returnType, IReadOnlyList<string> parameters) GetSignatureDetails(this ISymbol symbol)
-    {
-        string? returnType = null;
-        var parameters = new List<string>();
-
-        switch (symbol)
-        {
-            case IMethodSymbol method:
-                returnType = method.ReturnsVoid ? "void" : method.ReturnType.ToDisplayString();
-                parameters = method.Parameters.ToArray().Select(p => p.ToDisplayString()).ToList();
-                break;
-            case IPropertySymbol property:
-                returnType = property.Type.ToDisplayString();
-                parameters = property.Parameters.ToArray().Select(p => p.ToDisplayString()).ToList();
-                break;
-            case IFieldSymbol field:
-                returnType = field.Type.ToDisplayString();
-                break;
-            case IEventSymbol evt:
-                returnType = evt.Type.ToDisplayString();
-                break;
-        }
-
-        return (returnType, parameters);
-    }
-
 
     public static async Task<string> GetCallGraphMarkdown(this IMethodSymbol method,
-        Solution solution, CancellationToken cancellationToken)
+        Solution solution, int maxCaller, int maxCallee, CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
         var methodName = method.Name;
@@ -517,15 +406,18 @@ public static class SymbolExtensions
         sb.AppendLine();
 
         // Callers
-        foreach (var caller in callers)
+        foreach (var caller in callers.Take(maxCaller))
         {
-            var displayName = caller.CallingSymbol.Name;
-
-            sb.AppendLine($"- **{caller.CallingSymbol.GetSignature()}** ({caller.CallingSymbol.GetLineRange()})");
+            sb.AppendLine($"- **{caller.CallingSymbol.GetSignature()}** {caller.CallingSymbol.GetLineRange()}");
             foreach (var location in caller.Locations)
             {
-                sb.AppendLine($"{location.SourceSpan} L:{location.GetLineSpan()}");
+                sb.AppendLine($"`{location.GetLineContent()}` - {location.ToFileNameWithLineNumber()}");
             }
+        }
+
+        if (callers.Length > maxCaller)
+        {
+            sb.AppendLine($"- ... {callers.Length - maxCaller} more callers");
         }
 
         sb.AppendLine();
@@ -534,15 +426,46 @@ public static class SymbolExtensions
         sb.AppendLine();
 
         // Callees
-        foreach (var callee in callees)
+        foreach (var callee in callees.Take(maxCallee))
         {
             sb.AppendLine(callee.Method.GetSignature());
-            sb.AppendLine($"  - Called At {callee.FileLinePositionSpan} {callee.SourceText}");
+            sb.AppendLine($"  - `{callee.SourceText}` {callee.FileLinePositionSpan.ToFileNameWithLineNumber()}");
+        }
+
+        if (callees.Length > maxCallee)
+        {
+            sb.AppendLine($"- ... {callees.Length - maxCallee} more callees");
         }
 
         sb.AppendLine();
 
         return sb.ToString();
+    }
+
+    public static string ToFileNameWithLineNumber(this FileLinePositionSpan location)
+    {
+        return $"{Path.GetFileName(location.Path)}:{location.StartLinePosition.Line}-{location.EndLinePosition.Line}";
+    }
+
+    public static string ToFileNameWithLineNumber(this Location location)
+    {
+        var linespan = location.GetLineSpan();
+        return $"{Path.GetFileName(linespan.Path)}:{linespan.StartLinePosition.Line}-{linespan.EndLinePosition.Line}";
+    }
+
+    public static string GetLineContent(this Location location)
+    {
+        if (!location.IsInSource) return null;
+
+        var text = location.SourceTree.GetText();
+        var lineSpan = location.GetLineSpan();
+        return text.Lines[lineSpan.StartLinePosition.Line].ToString();
+    }
+
+    public static string ToLineNumber(this Location location)
+    {
+        var linespan = location.GetLineSpan();
+        return $"{linespan.StartLinePosition.Line}-{linespan.EndLinePosition.Line}";
     }
 
     public record SymbolCalleeInfo( IMethodSymbol Method, SourceText SourceText, FileLinePositionSpan FileLinePositionSpan);
@@ -712,64 +635,53 @@ public static class SymbolExtensions
     /// <summary>
     /// Resolve symbol from FileLocationParams
     /// </summary>
-    public static async Task<ISymbol> ResolveSymbolAsync(
+    public static async Task<IEnumerable<ISymbol>> ResolveSymbolAsync(
         this FileLocationParams location,
         IWorkspaceManager workspaceManager,
         SymbolFilter filter = SymbolFilter.TypeAndMember,
         CancellationToken cancellationToken = default)
     {
-        var symbols = await SymbolFinder.FindSourceDeclarationsAsync(workspaceManager.GetCurrentSolution(), location.SymbolName, true,
-            filter, cancellationToken);
+        var symbols = await workspaceManager.SearchSymbolsAsync(location.SymbolName, filter, cancellationToken);
 
+        if (string.IsNullOrEmpty(location.FilePath))
+        {
+            return symbols;
+        }
+
+        var filename = Path.GetFileName(location.FilePath)?.ToLowerInvariant();
         symbols = symbols.OrderBy(s => s.Locations.Sum(loc =>
-            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(location.FilePath.ToLowerInvariant()) ? 0 : 10000) +
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - location.LineNumber)));
+
+        return symbols;
+    }
+
+    /// <summary>
+    /// Resolve symbol from FileLocationParams
+    /// </summary>
+    public static async Task<ISymbol> FindSymbolAsync(
+        this FileLocationParams location,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter = SymbolFilter.TypeAndMember,
+        CancellationToken cancellationToken = default)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(location.SymbolName, filter, cancellationToken);
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(location.SymbolName, filter, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(location.FilePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        var filename = Path.GetFileName(location.FilePath)?.ToLowerInvariant();
+        symbols = symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(filename, StringComparison.InvariantCultureIgnoreCase) == true ? 0 : 10000) +
             Math.Abs(loc.GetLineSpan().StartLinePosition.Line - location.LineNumber)));
 
         return symbols.FirstOrDefault();
-    }
-
-    public static Document GetDocument(this ISymbol symbol, Solution solution)
-    {
-        var syntaxTree = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree;
-        return syntaxTree == null ? null : solution.GetDocument(syntaxTree);
-    }
-
-    public static bool WildcardMatch(string input, string pattern)
-    {
-        input = input.ToLowerInvariant();
-        pattern = pattern.ToLowerInvariant();
-
-        int inputIndex = 0, patternIndex = 0;
-        int inputBackup = -1, patternBackup = -1;
-
-        while (inputIndex < input.Length)
-        {
-            if (patternIndex < pattern.Length &&
-                (pattern[patternIndex] == '?' || pattern[patternIndex] == input[inputIndex]))
-            {
-                inputIndex++;
-                patternIndex++;
-            }
-            else if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
-            {
-                patternBackup = ++patternIndex;
-                inputBackup = inputIndex;
-            }
-            else if (patternBackup >= 0)
-            {
-                patternIndex = patternBackup;
-                inputIndex = ++inputBackup;
-            }
-            else
-            {
-                return false;
-            }
-        }
-
-        while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
-            patternIndex++;
-
-        return patternIndex == pattern.Length;
     }
 
     public static async Task<IEnumerable<ISymbol>> GetDeclaredSymbolsAsync(

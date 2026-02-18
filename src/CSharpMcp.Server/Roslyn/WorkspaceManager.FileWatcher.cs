@@ -58,7 +58,7 @@ internal sealed partial class WorkspaceManager
     {
         if (Interlocked.CompareExchange(ref _isCompiling, 1, 0) == 1)
         {
-            _logger.LogDebug("Compilation in progress, skipping {Count} file change(s)", fileChanges.Count);
+            _logger.LogInformation("Compilation in progress, skipping {Count} file change(s)", fileChanges.Count);
             return;
         }
 
@@ -83,7 +83,7 @@ internal sealed partial class WorkspaceManager
 
                 if (newSolution == null)
                 {
-                    _logger.LogDebug("Failed to create new solution, skipping file changes");
+                    _logger.LogInformation("Failed to create new solution, skipping file changes");
                     return;
                 }
 
@@ -91,7 +91,7 @@ internal sealed partial class WorkspaceManager
 
                 if (!applied)
                 {
-                    _logger.LogDebug("TryApplyChanges failed, retrying...");
+                    _logger.LogInformation("TryApplyChanges failed, retrying...");
                     await Task.Delay(50, cancellationToken);
                 }
 
@@ -176,7 +176,7 @@ internal sealed partial class WorkspaceManager
                     var documentIds = currentSolution.GetDocumentIdsWithFilePath(filePath);
                     if (documentIds.Length == 0)
                     {
-                        _logger.LogDebug("No documents found for path: {Path}", filePath);
+                        _logger.LogInformation("No documents found for path: {Path}", filePath);
                         continue;
                     }
 

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 
 namespace CSharpMcp.Server.Models.Tools;
 
@@ -11,17 +12,17 @@ public record FileLocationParams
     /// <summary>
     /// 符号名称 (用于验证和模糊匹配)
     /// </summary>
-    public string? SymbolName { get; init; }
+    public required string SymbolName { get; init; }
 
     /// <summary>
     /// 文件路径 (支持绝对路径、相对路径、仅文件名模糊匹配)
     /// </summary>
-    public required string FilePath { get; init; }
+    public string FilePath { get; init; }
 
     /// <summary>
     /// 行号 (1-based, 用于模糊匹配)
     /// </summary>
-    public int LineNumber { get; init; }
+    public int LineNumber { get; init; } = 0;
 }
 
 /// <summary>
@@ -127,9 +128,16 @@ public record GetInheritanceHierarchyParams : FileLocationParams
 public record GetCallGraphParams : FileLocationParams
 {
     /// <summary>
-    /// 是否包含外部调用
+    /// 最多显示调用者数量
     /// </summary>
-    public bool IncludeExternalCalls { get; init; } = true;
+    [Description("MaxCaller description")]
+    public int MaxCaller { get; init; } = 20;
+
+    /// <summary>
+    /// 最多显示调用数量
+    /// </summary>
+    [Description("MaxCallee description")]
+    public int MaxCallee { get; init; } = 10;
 }
 
 /// <summary>

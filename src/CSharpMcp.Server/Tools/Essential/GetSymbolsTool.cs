@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
+using Microsoft.CodeAnalysis.FindSymbols;
 
 namespace CSharpMcp.Server.Tools.Essential;
 

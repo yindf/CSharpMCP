@@ -20,10 +20,25 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     private readonly MSBuildWorkspace _workspace;
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private Solution? _currentSolution;
+    private IEnumerable<Project> _userProjects;
     private string? _loadedPath;
     private DateTime _lastUpdate;
     private FileWatcherService? _fileWatcher;
     private int _isCompiling;
+    private bool _isUnityProject;
+
+    private IEnumerable<Project> UserProjects
+    {
+        get
+        {
+            if (_userProjects == null)
+            {
+                _userProjects = GetUserProjects();
+            }
+
+            return _userProjects;
+        }
+    }
 
     public WorkspaceManager(ILogger<WorkspaceManager> logger)
     {
@@ -105,6 +120,16 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
                 {
                     _currentSolution = await _workspace.OpenSolutionAsync(normalizedPath, cancellationToken: cancellationToken);
                     kind = WorkspaceKind.Solution;
+
+                    foreach (var project in _workspace.CurrentSolution.Projects)
+                    {
+                        var symbols = await SymbolFinder.FindDeclarationsAsync(project, "UnityEngine", false, SymbolFilter.Namespace, cancellationToken);
+                        if (symbols.Any())
+                        {
+                            _isUnityProject = true;
+                            break;
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -119,6 +144,11 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
                     var project = await _workspace.OpenProjectAsync(normalizedPath, cancellationToken: cancellationToken);
                     _currentSolution = project.Solution;
                     kind = WorkspaceKind.Project;
+                    var symbols = await SymbolFinder.FindDeclarationsAsync(project, "UnityEngine", false, SymbolFilter.Namespace, cancellationToken);
+                    if (symbols.Any())
+                    {
+                        _isUnityProject = true;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -250,7 +280,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         var doc = docs.FirstOrDefault();
         if (doc != null)
         {
-            _logger.LogDebug("Found document by file name: {FilePath}", filePath);
+            _logger.LogInformation("Found document by file name: {FilePath}", filePath);
             return doc;
         }
 
@@ -324,7 +354,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
             var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation != null)
             {
-                _logger.LogDebug("Created compilation for project: {ProjectName}", project.Name);
+                _logger.LogInformation("Created compilation for project: {ProjectName}", project.Name);
             }
 
             return compilation;
@@ -359,18 +389,56 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         }
     }
 
-    public async Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query)
+    private IEnumerable<Project> GetUserProjects()
     {
-        return await SymbolFinder.FindSourceDeclarationsWithPatternAsync(_workspace.CurrentSolution, query, SymbolFilter.TypeAndMember);
+        if (!_isUnityProject)
+        {
+            foreach (var project in _workspace.CurrentSolution.Projects)
+                yield return project;
 
-        IEnumerable<ISymbol> symbols = Enumerable.Empty<ISymbol>();
+            yield break;
+        }
 
         foreach (var project in _workspace.CurrentSolution.Projects)
         {
-            var compilation = await project.GetCompilationAsync();
-            if (compilation == null)
+            var doc = project.Documents.FirstOrDefault();
+            if (doc == null)
                 continue;
-            symbols = symbols.Concat(compilation.GetSymbolsWithName(symbol => SymbolExtensions.WildcardMatch(symbol, query)));
+
+            if (doc.FilePath?.Contains("Packages", StringComparison.OrdinalIgnoreCase) == true)
+                continue;
+
+            if (doc.FilePath?.Contains("PackageCache", StringComparison.OrdinalIgnoreCase) == true)
+                continue;
+
+            _logger.LogInformation("[UserProject] Found project {ProjectName}", project.Name);
+
+            yield return project;
+        }
+    }
+
+    public async Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken)
+    {
+        var symbols = Enumerable.Empty<ISymbol>();
+        foreach (var project in UserProjects)
+        {
+            _logger.LogInformation("Searching symbols for project {ProjectName}", project.Name);
+
+            symbols = symbols.Concat(await SymbolFinder.FindSourceDeclarationsWithPatternAsync(project, query, filter, cancellationToken));
+        }
+
+        return symbols;
+    }
+
+    public async Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken)
+    {
+        var symbols = Enumerable.Empty<ISymbol>();
+        foreach (var project in UserProjects)
+        {
+            _logger.LogInformation("Searching symbols for project {ProjectName}", project.Name);
+
+            symbols = symbols.Concat(await SymbolFinder.FindSourceDeclarationsAsync(project, query, true,
+                filter, cancellationToken));
         }
 
         return symbols;
@@ -395,44 +463,6 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         {
             _logger.LogError(ex, "Failed to get source text for: {FilePath}", filePath);
             return null;
-        }
-    }
-
-    /// <summary>
-    /// 刷新工作区
-    /// </summary>
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
-    {
-        if (_loadedPath == null)
-        {
-            return;
-        }
-
-        _logger.LogInformation("Refreshing workspace: {Path}", _loadedPath);
-
-        try
-        {
-            // Reopen the solution to refresh MSBuildWorkspace's internal cache
-            if (File.Exists(_loadedPath))
-            {
-                var extension = Path.GetExtension(_loadedPath).ToLowerInvariant();
-                if (extension == ".sln")
-                {
-                    _currentSolution = await _workspace.OpenSolutionAsync(_loadedPath, cancellationToken: cancellationToken);
-                }
-                else if (extension == ".csproj")
-                {
-                    var project = await _workspace.OpenProjectAsync(_loadedPath, cancellationToken: cancellationToken);
-                    _currentSolution = project.Solution;
-                }
-            }
-
-            _lastUpdate = DateTime.UtcNow;
-            _logger.LogInformation("Workspace refreshed successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to refresh workspace");
         }
     }
 
