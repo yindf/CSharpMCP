@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -40,13 +40,17 @@ public class GetTypeMembersTool
             if (symbol == null)
             {
                 logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
+                return MarkdownHelper.BuildSymbolNotFoundResponse(
+                    filePath,
+                    lineNumber,
+                    symbolName,
+                    "- Line numbers should point to a class, struct, interface, or enum declaration\n- Use `GetSymbols` first to find valid line numbers for types\n- Or provide a valid `symbolName` parameter");
             }
 
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
-                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
+                return MarkdownHelper.BuildNotATypeResponse(symbol.Name, symbol.Kind.ToString());
             }
 
             var members = GetMembers(type, includeInherited);
@@ -139,54 +143,6 @@ public class GetTypeMembersTool
             sb.AppendLine();
         }
 
-        return sb.ToString();
-    }
-
-    private static string GetNoSymbolFoundHelpResponse(string filePath, int? lineNumber, string? symbolName)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## No Symbol Found");
-        sb.AppendLine();
-        if (!string.IsNullOrEmpty(symbolName))
-        {
-            sb.AppendLine($"**Symbol Name**: {symbolName}");
-        }
-        if (lineNumber.HasValue)
-        {
-            sb.AppendLine($"**Line Number**: {lineNumber.Value}");
-        }
-        sb.AppendLine($"**File**: {filePath}");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Line numbers should point to a class, struct, interface, or enum declaration");
-        sb.AppendLine("- Use `GetSymbols` first to find valid line numbers for types");
-        sb.AppendLine("- Or provide a valid `symbolName` parameter");
-        sb.AppendLine();
-        sb.AppendLine("**Usage**:");
-        sb.AppendLine("```");
-        sb.AppendLine("GetTypeMembers(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 7  // Line where class is declared");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        return sb.ToString();
-    }
-
-    private static string GetNotATypeHelpResponse(string symbolName, string symbolKind, string filePath, int? lineNumber)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Not a Type");
-        sb.AppendLine();
-        sb.AppendLine($"**Symbol**: `{symbolName}`");
-        sb.AppendLine($"**Kind**: {symbolKind}");
-        sb.AppendLine();
-        sb.AppendLine("The symbol at the specified location is not a class, struct, interface, or enum.");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Use `GetSymbols` first to find valid type declarations");
-        sb.AppendLine("- Ensure the line number points to a type declaration (not a method, property, etc.)");
-        sb.AppendLine();
         return sb.ToString();
     }
 }

@@ -1,3 +1,5 @@
+﻿using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -185,5 +187,204 @@ public static class MarkdownHelper
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Build a "No Symbol Found" error response with context
+    /// </summary>
+    public static string BuildSymbolNotFoundResponse(
+        string filePath,
+        int? lineNumber,
+        string? symbolName,
+        string? contextTip = null)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## No Symbol Found");
+        sb.AppendLine();
+
+        if (!string.IsNullOrEmpty(symbolName))
+        {
+            sb.AppendLine($"**Symbol Name**: {symbolName}");
+        }
+
+        if (lineNumber.HasValue)
+        {
+            sb.AppendLine($"**Line Number**: {lineNumber.Value}");
+        }
+
+        sb.AppendLine($"**File**: {filePath}");
+        sb.AppendLine();
+
+        if (contextTip != null)
+        {
+            sb.AppendLine("**Tips**:");
+            sb.AppendLine(contextTip);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Build a "Not a Type" error response
+    /// </summary>
+    public static string BuildNotATypeResponse(string symbolName, string symbolKind)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Not a Type");
+        sb.AppendLine();
+        sb.AppendLine($"**Symbol**: `{symbolName}`");
+        sb.AppendLine($"**Kind**: {symbolKind}");
+        sb.AppendLine();
+        sb.AppendLine("The symbol at the specified location is not a class, struct, interface, or enum.");
+        sb.AppendLine();
+        sb.AppendLine("**Tips**:");
+        sb.AppendLine("- Use `GetSymbols` first to find valid type declarations");
+        sb.AppendLine("- Ensure the line number points to a type declaration (not a method, property, etc.)");
+        sb.AppendLine();
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Build a "Not a Method" error response
+    /// </summary>
+    public static string BuildNotAMethodResponse(string symbolName, string symbolKind)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Not a Method");
+        sb.AppendLine();
+        sb.AppendLine($"**Symbol**: `{symbolName}`");
+        sb.AppendLine($"**Kind**: {symbolKind}");
+        sb.AppendLine();
+        sb.AppendLine("The symbol at the specified location is not a method.");
+        sb.AppendLine();
+        sb.AppendLine("**Tips**:");
+        sb.AppendLine("- Use `GetSymbols` first to find valid method declarations");
+        sb.AppendLine("- Ensure the line number points to a method declaration");
+        sb.AppendLine("- Properties, fields, and other members don't have call graphs");
+        sb.AppendLine();
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append location information to StringBuilder if symbol has valid location
+    /// </summary>
+    public static void AppendLocationIfExists(StringBuilder sb, ISymbol symbol)
+    {
+        var (startLine, _) = symbol.GetLineRange();
+        var filePath = symbol.GetFilePath();
+
+        if (startLine > 0 && !string.IsNullOrEmpty(filePath))
+        {
+            var fileName = System.IO.Path.GetFileName(filePath);
+            sb.AppendLine($"  - `{fileName}:{startLine}`");
+        }
+    }
+
+    /// <summary>
+    /// Build symbol information section (name, kind, accessibility, location)
+    /// </summary>
+    public static void BuildSymbolInfoSection(
+        StringBuilder sb,
+        ISymbol symbol,
+        bool includeContainingType = true,
+        bool includeNamespace = true,
+        bool includeLocation = true)
+    {
+        sb.AppendLine("**Basic Info**:");
+        sb.AppendLine($"- **Kind**: {symbol.GetDisplayKind()}");
+        sb.AppendLine($"- **Accessibility**: {symbol.GetAccessibilityString()}");
+
+        if (includeContainingType)
+        {
+            var containingType = symbol.GetContainingTypeName();
+            if (!string.IsNullOrEmpty(containingType))
+            {
+                sb.AppendLine($"- **Containing Type**: {containingType}");
+            }
+        }
+
+        if (includeNamespace)
+        {
+            var ns = symbol.GetNamespace();
+            if (!string.IsNullOrEmpty(ns))
+            {
+                sb.AppendLine($"- **Namespace**: {ns}");
+            }
+        }
+
+        if (includeLocation)
+        {
+            var (startLine, endLine) = symbol.GetLineRange();
+            var filePath = symbol.GetFilePath();
+
+            if (startLine > 0 && !string.IsNullOrEmpty(filePath))
+            {
+                var fileName = System.IO.Path.GetFileName(filePath);
+                sb.AppendLine($"- **Location**: `{fileName}:{startLine}-{endLine}`");
+            }
+        }
+
+        sb.AppendLine();
+    }
+
+    /// <summary>
+    /// Build references section for a symbol
+    /// </summary>
+    public static async Task BuildReferencesSectionAsync(
+        StringBuilder sb,
+        ISymbol symbol,
+        Solution solution,
+        int maxReferences,
+        CancellationToken cancellationToken)
+    {
+        var referencedSymbols = (await Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindReferencesAsync(
+            symbol,
+            solution,
+            cancellationToken)).ToImmutableList();
+
+        if (referencedSymbols.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine($"**References** (showing first {Math.Min(maxReferences, referencedSymbols.Count)} of {referencedSymbols.Count}):");
+        sb.AppendLine();
+
+        int shownRefs = 0;
+        foreach (var refSym in referencedSymbols)
+        {
+            foreach (var loc in refSym.Locations)
+            {
+                if (shownRefs >= maxReferences)
+                {
+                    break;
+                }
+
+                var refFilePath = loc.Document.FilePath;
+                var refFileName = System.IO.Path.GetFileName(refFilePath);
+                var refLineSpan = loc.Location.GetLineSpan();
+                var refLine = refLineSpan.StartLinePosition.Line + 1;
+
+                var lineText = await ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
+
+                sb.AppendLine($"- `{refFileName}:{refLine}`");
+                if (!string.IsNullOrEmpty(lineText))
+                {
+                    sb.AppendLine($"  - {lineText.Trim()}");
+                }
+
+                shownRefs++;
+            }
+
+            if (shownRefs >= maxReferences)
+            {
+                break;
+            }
+        }
+
+        sb.AppendLine();
     }
 }

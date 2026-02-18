@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Text;
 using System.Threading;
@@ -39,13 +39,17 @@ public class GetCallGraphTool
             if (symbol == null)
             {
                 logger.LogWarning("Method not found: {SymbolName}", symbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
+                return MarkdownHelper.BuildSymbolNotFoundResponse(
+                    filePath,
+                    lineNumber,
+                    symbolName,
+                    "- Line numbers should point to a method declaration\n- Use `GetSymbols` first to find valid line numbers for methods\n- Or provide a valid `symbolName` parameter");
             }
 
             if (symbol is not IMethodSymbol method)
             {
                 logger.LogWarning("Symbol is not a method: {SymbolName}", symbol.Name);
-                return GetNotAMethodHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
+                return MarkdownHelper.BuildNotAMethodResponse(symbol.Name, symbol.Kind.ToString());
             }
 
             var solution = workspaceManager.GetCurrentSolution();
@@ -66,54 +70,5 @@ public class GetCallGraphTool
             "GetCallGraph(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line where method is declared\n    symbolName: \"MyMethod\"\n)",
             "- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCallers: 50, maxCallees: 20)`"
         );
-    }
-
-    private static string GetNoSymbolFoundHelpResponse(string filePath, int? lineNumber, string? symbolName)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## No Symbol Found");
-        sb.AppendLine();
-        if (!string.IsNullOrEmpty(symbolName))
-        {
-            sb.AppendLine($"**Symbol Name**: {symbolName}");
-        }
-        if (lineNumber.HasValue)
-        {
-            sb.AppendLine($"**Line Number**: {lineNumber.Value}");
-        }
-        sb.AppendLine($"**File**: {filePath}");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Line numbers should point to a method declaration");
-        sb.AppendLine("- Use `GetSymbols` first to find valid line numbers for methods");
-        sb.AppendLine("- Or provide a valid `symbolName` parameter");
-        sb.AppendLine();
-        sb.AppendLine("**Usage**:");
-        sb.AppendLine("```");
-        sb.AppendLine("GetCallGraph(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 42  // Line where method is declared");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        return sb.ToString();
-    }
-
-    private static string GetNotAMethodHelpResponse(string symbolName, string symbolKind, string filePath, int? lineNumber)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Not a Method");
-        sb.AppendLine();
-        sb.AppendLine($"**Symbol**: `{symbolName}`");
-        sb.AppendLine($"**Kind**: {symbolKind}");
-        sb.AppendLine();
-        sb.AppendLine("The symbol at the specified location is not a method.");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Use `GetSymbols` first to find valid method declarations");
-        sb.AppendLine("- Ensure the line number points to a method declaration");
-        sb.AppendLine("- Properties, fields, and other members don't have call graphs");
-        sb.AppendLine();
-        return sb.ToString();
     }
 }

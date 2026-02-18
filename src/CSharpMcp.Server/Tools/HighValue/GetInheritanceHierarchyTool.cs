@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
@@ -23,8 +23,8 @@ public class GetInheritanceHierarchyTool
         CancellationToken cancellationToken,
         [Description("1-based line number near the type declaration")] int lineNumber = 0,
         [Description("The name of the type to analyze")] string? symbolName = null,
-        [Description("Whether to include derived types in the hierarchy")] bool includeDerived = true,
-        [Description("Maximum depth for derived type search (0 = unlimited, default 3)")] int maxDerivedDepth = 3)
+        [Description("Whether to include derived types in the hierarchy")] bool includeDerivedTypes = true,
+        [Description("Maximum depth for derived type search (0 = unlimited, default 3)")] int maxDepth = 3)
     {
         try
         {
@@ -41,28 +41,32 @@ public class GetInheritanceHierarchyTool
             if (symbol == null)
             {
                 logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
-                return GetNoSymbolFoundHelpResponse(filePath, lineNumber, symbolName);
+                return MarkdownHelper.BuildSymbolNotFoundResponse(
+                    filePath,
+                    lineNumber,
+                    symbolName,
+                    "- Line numbers should point to a class, struct, interface, or enum declaration\n- Use `GetSymbols` first to find valid line numbers for types\n- Or provide a valid `symbolName` parameter");
             }
 
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
-                return GetNotATypeHelpResponse(symbol.Name, symbol.Kind.ToString(), filePath, lineNumber);
+                return MarkdownHelper.BuildNotATypeResponse(symbol.Name, symbol.Kind.ToString());
             }
 
             var solution = workspaceManager.GetCurrentSolution();
-            var maxDepth = maxDerivedDepth > 0 ? maxDerivedDepth : 3;
+            var depth = maxDepth > 0 ? maxDepth : 3;
 
             var tree = await inheritanceAnalyzer.GetInheritanceTreeAsync(
                 type,
                 solution,
-                includeDerived,
-                maxDepth,
+                includeDerivedTypes,
+                depth,
                 cancellationToken);
 
             logger.LogInformation("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
 
-            return BuildHierarchyMarkdown(type, tree, includeDerived);
+            return BuildHierarchyMarkdown(type, tree, includeDerivedTypes);
         }
         catch (Exception ex)
         {
@@ -77,14 +81,14 @@ public class GetInheritanceHierarchyTool
             "Get Inheritance Hierarchy",
             message,
             "GetInheritanceHierarchy(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 7,  // Line where class is declared\n    symbolName: \"MyClass\"\n)",
-            "- `GetInheritanceHierarchy(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`\n- `GetInheritanceHierarchy(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeDerived: true)`"
+            "- `GetInheritanceHierarchy(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`\n- `GetInheritanceHierarchy(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeDerivedTypes: true)`"
         );
     }
 
     private static string BuildHierarchyMarkdown(
         INamedTypeSymbol type,
         InheritanceTree tree,
-        bool includeDerived)
+        bool includeDerivedTypes)
     {
         var sb = new StringBuilder();
         var typeName = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
@@ -103,7 +107,7 @@ public class GetInheritanceHierarchyTool
             foreach (var baseType in tree.BaseTypes)
             {
                 sb.AppendLine($"- **{baseType.ToDisplayString()}**");
-                AppendLocationIfExists(sb, baseType);
+                MarkdownHelper.AppendLocationIfExists(sb, baseType);
             }
             sb.AppendLine();
         }
@@ -115,19 +119,19 @@ public class GetInheritanceHierarchyTool
             foreach (var iface in tree.Interfaces)
             {
                 sb.AppendLine($"- **{iface.ToDisplayString()}**");
-                AppendLocationIfExists(sb, iface);
+                MarkdownHelper.AppendLocationIfExists(sb, iface);
             }
             sb.AppendLine();
         }
 
-        if (includeDerived && tree.DerivedTypes.Count > 0)
+        if (includeDerivedTypes && tree.DerivedTypes.Count > 0)
         {
             sb.AppendLine($"### Derived Types ({tree.DerivedTypes.Count}, depth: {tree.Depth})");
             sb.AppendLine();
             foreach (var derived in tree.DerivedTypes)
             {
                 sb.AppendLine($"- **{derived.ToDisplayString()}**");
-                AppendLocationIfExists(sb, derived);
+                MarkdownHelper.AppendLocationIfExists(sb, derived);
             }
             sb.AppendLine();
         }
@@ -135,62 +139,4 @@ public class GetInheritanceHierarchyTool
         return sb.ToString();
     }
 
-    private static void AppendLocationIfExists(StringBuilder sb, ISymbol symbol)
-    {
-        var (startLine, _) = symbol.GetLineRange();
-        var filePath = symbol.GetFilePath();
-        if (startLine > 0 && !string.IsNullOrEmpty(filePath))
-        {
-            var fileName = System.IO.Path.GetFileName(filePath);
-            sb.AppendLine($"  - `{fileName}:{startLine}`");
-        }
-    }
-
-    private static string GetNoSymbolFoundHelpResponse(string filePath, int? lineNumber, string? symbolName)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## No Symbol Found");
-        sb.AppendLine();
-        if (!string.IsNullOrEmpty(symbolName))
-        {
-            sb.AppendLine($"**Symbol Name**: {symbolName}");
-        }
-        if (lineNumber.HasValue)
-        {
-            sb.AppendLine($"**Line Number**: {lineNumber.Value}");
-        }
-        sb.AppendLine($"**File**: {filePath}");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Line numbers should point to a class, struct, interface, or enum declaration");
-        sb.AppendLine("- Use `GetSymbols` first to find valid line numbers for types");
-        sb.AppendLine("- Or provide a valid `symbolName` parameter");
-        sb.AppendLine();
-        sb.AppendLine("**Usage**:");
-        sb.AppendLine("```");
-        sb.AppendLine("GetInheritanceHierarchy(");
-        sb.AppendLine("    filePath: \"path/to/File.cs\",");
-        sb.AppendLine("    lineNumber: 7  // Line where class is declared");
-        sb.AppendLine(")");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        return sb.ToString();
-    }
-
-    private static string GetNotATypeHelpResponse(string symbolName, string symbolKind, string filePath, int? lineNumber)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Not a Type");
-        sb.AppendLine();
-        sb.AppendLine($"**Symbol**: `{symbolName}`");
-        sb.AppendLine($"**Kind**: {symbolKind}");
-        sb.AppendLine();
-        sb.AppendLine("The symbol at the specified location is not a class, struct, interface, or enum.");
-        sb.AppendLine();
-        sb.AppendLine("**Tips**:");
-        sb.AppendLine("- Use `GetSymbols` first to find valid type declarations");
-        sb.AppendLine("- Ensure the line number points to a type declaration (not a method, property, etc.)");
-        sb.AppendLine();
-        return sb.ToString();
-    }
 }
