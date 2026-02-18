@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.ComponentModel;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,7 +20,7 @@ public class LoadWorkspaceTool
     /// <summary>
     /// Load a C# solution or project for analysis
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Load a C# solution (.sln), project (.csproj), or directory for analysis")]
     public static async Task<string> LoadWorkspace(
         string path,
         IWorkspaceManager workspaceManager,

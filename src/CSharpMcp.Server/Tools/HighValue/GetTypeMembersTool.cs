@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -21,7 +22,7 @@ public class GetTypeMembersTool
     /// <summary>
     /// Get all members of a type
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Get all members (methods, properties, fields, events) of a type")]
     public static async Task<string> GetTypeMembers(
         GetTypeMembersParams parameters,
         IWorkspaceManager workspaceManager,
@@ -66,8 +67,32 @@ public class GetTypeMembersTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetTypeMembersTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get type members: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol is not a type (use GetSymbols to find types)\n- Symbol is from an external library\n- Workspace is not loaded (call LoadWorkspace first)");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Get Type Members - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetTypeMembers(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 7,  // Line where class is declared");
+        sb.AppendLine("    symbolName: \"MyClass\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetTypeMembers(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`");
+        sb.AppendLine("- `GetTypeMembers(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeInherited: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static List<ISymbol> GetMembers(

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -21,7 +22,7 @@ public class SearchSymbolsTool
     /// <summary>
     /// Search for symbols across the entire workspace by name pattern
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Search for symbols across the entire workspace by name with wildcard support")]
     public static async Task<string> SearchSymbols(
         SearchSymbolsParams parameters,
         IWorkspaceManager workspaceManager,
@@ -38,7 +39,7 @@ public class SearchSymbolsTool
 
             if (string.IsNullOrWhiteSpace(parameters.Query))
             {
-                throw new ArgumentException("Search query cannot be empty.", nameof(parameters));
+                return GetErrorHelpResponse("Search query cannot be empty. Please provide a search term.");
             }
 
             // Use extension method to ensure default value
@@ -107,7 +108,7 @@ public class SearchSymbolsTool
         {
             logger.LogError(ex, "=== SearchSymbolsTool ERROR ===: {Message}", ex.Message);
             logger.LogError(ex, "Stack trace: {StackTrace}", ex.StackTrace);
-            throw;
+            return GetErrorHelpResponse($"Failed to search symbols: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Workspace is not loaded (call LoadWorkspace first)\n- Search query is too complex\n- Workspace has compilation errors");
         }
     }
 

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -20,7 +21,7 @@ public class GetInheritanceHierarchyTool
     /// <summary>
     /// Get the complete inheritance hierarchy for a type
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Get the complete inheritance hierarchy for a type including base types, interfaces, and derived types")]
     public static async Task<string> GetInheritanceHierarchy(
         GetInheritanceHierarchyParams parameters,
         IWorkspaceManager workspaceManager,
@@ -77,8 +78,32 @@ public class GetInheritanceHierarchyTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetInheritanceHierarchyTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get inheritance hierarchy: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol is not a type (use GetSymbols to find types)\n- Symbol is from an external library\n- Workspace is not loaded (call LoadWorkspace first)");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Get Inheritance Hierarchy - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetInheritanceHierarchy(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 7,  // Line where class is declared");
+        sb.AppendLine("    symbolName: \"MyClass\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetInheritanceHierarchy(filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\")`");
+        sb.AppendLine("- `GetInheritanceHierarchy(filePath: \"./Controllers.cs\", lineNumber: 42, symbolName: \"BaseController\", includeDerived: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static string BuildHierarchyMarkdown(

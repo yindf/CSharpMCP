@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -24,7 +25,7 @@ public class GoToDefinitionTool
     /// <summary>
     /// Get comprehensive symbol information including documentation, comments, and context
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Get comprehensive information about a symbol including signature, documentation, and location")]
     public static async Task<string> GoToDefinition(
         ResolveSymbolParams parameters,
         IWorkspaceManager workspaceManager,
@@ -47,7 +48,7 @@ public class GoToDefinitionTool
             {
                 var errorDetails = await BuildErrorDetails(parameters, workspaceManager, cancellationToken);
                 logger.LogWarning("Symbol not found: {Details}", errorDetails);
-                throw new FileNotFoundException(errorDetails);
+                return GetErrorHelpResponse(errorDetails);
             }
 
             // Build Markdown directly
@@ -65,8 +66,32 @@ public class GoToDefinitionTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing ResolveSymbolTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to resolve symbol: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol not found in workspace\n- Workspace is not loaded (call LoadWorkspace first)\n- Symbol is from an external library");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Go To Definition - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GoToDefinition(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 42,  // Line near the symbol reference");
+        sb.AppendLine("    symbolName: \"MyMethod\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GoToDefinition(filePath: \"C:/MyProject/Program.cs\", lineNumber: 15, symbolName: \"MyMethod\")`");
+        sb.AppendLine("- `GoToDefinition(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeBody: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static async Task<string> BuildSymbolMarkdownAsync(

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -23,7 +24,7 @@ public class BatchGetSymbolsTool
     /// <summary>
     /// Batch get symbol information for multiple symbols in parallel
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Query multiple symbols in parallel for improved performance")]
     public static async Task<string> BatchGetSymbols(
         BatchGetSymbolsParams parameters,
         IWorkspaceManager workspaceManager,
@@ -109,8 +110,32 @@ public class BatchGetSymbolsTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing BatchGetSymbolsTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to batch get symbols: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Workspace is not loaded (call LoadWorkspace first)\n- Invalid symbol parameters provided\n- Symbols are from external libraries");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Batch Get Symbols - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("BatchGetSymbols(");
+        sb.AppendLine("    symbols: [");
+        sb.AppendLine("        { filePath: \"path/to/File1.cs\", lineNumber: 15, symbolName: \"MyClass\" },");
+        sb.AppendLine("        { filePath: \"path/to/File2.cs\", lineNumber: 42, symbolName: \"MyMethod\" }");
+        sb.AppendLine("    ]");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `BatchGetSymbols(symbols: [{ filePath: \"C:/MyProject/Models.cs\", lineNumber: 15, symbolName: \"User\" }])`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static string BuildBatchResultsMarkdown(

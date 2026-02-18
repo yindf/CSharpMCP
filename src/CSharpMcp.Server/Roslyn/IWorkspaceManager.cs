@@ -65,7 +65,7 @@ public interface IWorkspaceManager
     /// <summary>
     /// 获取所有项目
     /// </summary>
-    IReadOnlyList<Project> GetProjects();
+    IEnumerable<Project> GetProjects();
 
     Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
     Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);

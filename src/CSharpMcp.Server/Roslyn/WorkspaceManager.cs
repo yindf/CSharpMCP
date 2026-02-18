@@ -270,7 +270,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
 
         // Try file name only
         var fileName = Path.GetFileName(filePath);
-        var docs = _currentSolution.Projects
+        var docs = UserProjects
             .SelectMany(p => p.Documents)
             .Where(d => string.Equals(
                 Path.GetFileName(d.FilePath),
@@ -474,9 +474,9 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// <summary>
     /// 获取所有项目
     /// </summary>
-    public IReadOnlyList<Project> GetProjects()
+    public IEnumerable<Project> GetProjects()
     {
-        return _currentSolution?.Projects.ToList() ?? [];
+        return UserProjects;
     }
 
     public void Dispose()

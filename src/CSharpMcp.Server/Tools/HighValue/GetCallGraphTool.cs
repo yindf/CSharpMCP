@@ -22,7 +22,7 @@ public class GetCallGraphTool
     /// <summary>
     /// Get the call graph for a method showing callers and callees
     /// </summary>
-    [McpServerTool, Description("get call graph, will at most show MaxCaller callers and MaxCallee callees.")]
+    [McpServerTool, Description("Get call graph for a method showing its callers and callees")]
     public static async Task<string> GetCallGraph(
         GetCallGraphParams parameters,
         IWorkspaceManager workspaceManager,
@@ -64,8 +64,32 @@ public class GetCallGraphTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetCallGraphTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get call graph: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol is not a method (use GetSymbols to find methods)\n- Symbol is from an external library\n- Workspace is not loaded (call LoadWorkspace first)");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Get Call Graph - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetCallGraph(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 42,  // Line where method is declared");
+        sb.AppendLine("    symbolName: \"MyMethod\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetCallGraph(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`");
+        sb.AppendLine("- `GetCallGraph(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", maxCaller: 50, maxCallee: 20)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -23,7 +24,7 @@ public class GetDiagnosticsTool
     /// <summary>
     /// Get compiler errors and warnings for a file or workspace
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Get compiler diagnostics (errors, warnings, info) for files or the entire workspace")]
     public static async Task<string> GetDiagnostics(
         GetDiagnosticsParams parameters,
         IWorkspaceManager workspaceManager,
@@ -47,7 +48,7 @@ public class GetDiagnosticsTool
             var solution = workspaceManager.GetCurrentSolution();
             if (solution == null)
             {
-                throw new InvalidOperationException("Workspace not loaded");
+                return GetErrorHelpResponse("Workspace not loaded. Please call LoadWorkspace first to load a C# solution or project.");
             }
 
             // Determine which projects/documents to analyze
@@ -57,7 +58,7 @@ public class GetDiagnosticsTool
                 var document = await workspaceManager.GetDocumentAsync(parameters.FilePath, cancellationToken);
                 if (document == null)
                 {
-                    throw new FileNotFoundException($"File not found: {parameters.FilePath}");
+                    return GetErrorHelpResponse($"File not found: `{parameters.FilePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
                 }
 
                 var result = await ProcessDocumentAsync(document, parameters, filesWithDiagnostics, logger, cancellationToken);
@@ -98,8 +99,29 @@ public class GetDiagnosticsTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetDiagnosticsTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get diagnostics: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Workspace is not loaded (call LoadWorkspace first)\n- File path is incorrect\n- Workspace has compilation errors");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## Get Diagnostics - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetDiagnostics()");
+        sb.AppendLine("GetDiagnostics(filePath: \"path/to/File.cs\")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetDiagnostics()` - Get all workspace diagnostics");
+        sb.AppendLine("- `GetDiagnostics(filePath: \"C:/MyProject/Program.cs\", includeWarnings: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static async Task<List<DiagnosticItem>> ProcessDocumentAsync(

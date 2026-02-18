@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -25,7 +26,7 @@ public class GetSymbolCompleteTool
     /// <summary>
     /// Get complete symbol information from multiple sources in one call
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Get complete symbol information combining signature, documentation, references, inheritance, and call graph")]
     public static async Task<string> GetSymbolComplete(
         GetSymbolCompleteParams parameters,
         IWorkspaceManager workspaceManager,
@@ -48,7 +49,7 @@ public class GetSymbolCompleteTool
             if (symbol == null)
             {
                 logger.LogWarning("Symbol not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
-                throw new FileNotFoundException($"Symbol not found: {parameters.SymbolName ?? "at specified location"}");
+                return GetErrorHelpResponse($"Symbol not found: `{parameters.SymbolName ?? "at specified location"}`\n\nCommon issues:\n- Symbol name is incorrect\n- File path or line number is wrong\n- Symbol is from an external library");
             }
 
             // Build complete Markdown
@@ -67,8 +68,35 @@ public class GetSymbolCompleteTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetSymbolCompleteTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get complete symbol information: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol not found in workspace\n- Workspace is not loaded (call LoadWorkspace first)\n- Symbol is from an external library");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Get Symbol Complete - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetSymbolComplete(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 42,  // Line near the symbol");
+        sb.AppendLine("    symbolName: \"MyMethod\",");
+        sb.AppendLine("    includeReferences: true,");
+        sb.AppendLine("    includeInheritance: false,");
+        sb.AppendLine("    includeCallGraph: false");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetSymbolComplete(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`");
+        sb.AppendLine("- `GetSymbolComplete(filePath: \"./Models.cs\", lineNumber: 42, symbolName: \"User\", includeReferences: true, includeInheritance: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static async Task<string> BuildCompleteMarkdownAsync(

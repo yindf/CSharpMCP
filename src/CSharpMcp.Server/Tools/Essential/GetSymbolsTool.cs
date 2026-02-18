@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -26,11 +27,10 @@ public class GetSymbolsTool
     /// </summary>
     /// <param name="parameters">Tool parameters including file path and filters</param>
     /// <param name="workspaceManager">Workspace manager service</param>
-    /// <param name="symbolAnalyzer">Symbol analyzer service</param>
     /// <param name="logger">Logger instance</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>List of symbols found in the document</returns>
-    [McpServerTool]
+    [McpServerTool, Description("Get all symbols (classes, methods, properties, etc.) declared in a C# file")]
     public static async Task<string> GetSymbols(
         GetSymbolsParams parameters,
         IWorkspaceManager workspaceManager,
@@ -41,7 +41,8 @@ public class GetSymbolsTool
         {
             if (parameters == null)
             {
-                throw new ArgumentNullException(nameof(parameters));
+                logger.LogError("Error executing GetSymbolsTool, parameters == null");
+                return GetErrorHelpResponse($"Failed to get symbols: parameters == null");
             }
 
             logger.LogDebug("Getting symbols for: {FilePath}", parameters.FilePath);
@@ -50,7 +51,8 @@ public class GetSymbolsTool
             if (document == null)
             {
                 logger.LogWarning("Document not found: {FilePath}", parameters.FilePath);
-                throw new FileNotFoundException($"Document not found: {parameters.FilePath}");
+                return GetErrorHelpResponse(
+                    $"Document not found: `{parameters.FilePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
             }
 
             var symbols = (await document.GetDeclaredSymbolsAsync(cancellationToken)).ToImmutableList();
@@ -63,8 +65,31 @@ public class GetSymbolsTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing GetSymbolsTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to get symbols: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- File path is incorrect\n- Workspace is not loaded (call LoadWorkspace first)\n- File has compilation errors");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Get Symbols - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("GetSymbols(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    symbolName: \"ClassName\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `GetSymbols(filePath: \"C:/MyProject/MyClass.cs\", symbolName: \"MyClass\")`");
+        sb.AppendLine("- `GetSymbols(filePath: \"./Utils.cs\", symbolName: \"Helper\", includeBody: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static async Task<string> BuildSymbolsMarkdownAsync(
@@ -82,6 +107,9 @@ public class GetSymbolsTool
 
         foreach (var symbol in symbols)
         {
+            if (symbol.IsImplicitlyDeclared)
+                continue;
+
             var displayName = symbol.GetDisplayName();
             var (startLine, endLine) = symbol.GetLineRange();
             var kind = symbol.GetDisplayKind();

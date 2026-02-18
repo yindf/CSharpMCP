@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -25,7 +26,7 @@ public class FindReferencesTool
     /// <summary>
     /// Find all references to a symbol across the workspace
     /// </summary>
-    [McpServerTool]
+    [McpServerTool, Description("Find all references to a symbol across the workspace")]
     public static async Task<string> FindReferences(
         FindReferencesParams parameters,
         IWorkspaceManager workspaceManager,
@@ -48,7 +49,7 @@ public class FindReferencesTool
             {
                 var errorDetails = BuildErrorDetails(parameters, workspaceManager, cancellationToken);
                 logger.LogWarning("Symbol not found: {Details}", errorDetails);
-                throw new FileNotFoundException(errorDetails);
+                return GetErrorHelpResponse(errorDetails);
             }
 
             // Get the solution
@@ -68,8 +69,32 @@ public class FindReferencesTool
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing FindReferencesTool");
-            throw;
+            return GetErrorHelpResponse($"Failed to find references: {ex.Message}\n\nStack Trace:\n```\n{ex.StackTrace}\n```\n\nCommon issues:\n- Symbol not found in workspace\n- Workspace is not loaded (call LoadWorkspace first)\n- Symbol is from an external library");
         }
+    }
+
+    private static string GetErrorHelpResponse(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Find References - Failed");
+        sb.AppendLine();
+        sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("**Usage:**");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine("FindReferences(");
+        sb.AppendLine("    filePath: \"path/to/File.cs\",");
+        sb.AppendLine("    lineNumber: 42,  // Line near the symbol declaration");
+        sb.AppendLine("    symbolName: \"MyMethod\"");
+        sb.AppendLine(")");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("**Examples:**");
+        sb.AppendLine("- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`");
+        sb.AppendLine("- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", includeContext: true)`");
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static async Task<string> BuildReferencesMarkdownAsync(
