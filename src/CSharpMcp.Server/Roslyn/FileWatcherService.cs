@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 
 namespace CSharpMcp.Server.Roslyn;
 
@@ -14,9 +14,9 @@ internal sealed class FileWatcherService : IDisposable
     private readonly Func<FileChangeType, string, CancellationToken, Task> _onFileChanged;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _processingLock = new(1, 1);
+    private readonly object _pendingChangesLock = new();
 
-    private FileChangeType? _pendingChangeType;
-    private string? _pendingFilePath;
+    private readonly HashSet<string> _pendingFilePaths = new();
     private bool _disposed;
 
     public FileWatcherService(
@@ -94,8 +94,10 @@ internal sealed class FileWatcherService : IDisposable
     /// </summary>
     private void ScheduleChange(FileChangeType changeType, string filePath)
     {
-        _pendingChangeType = changeType;
-        _pendingFilePath = filePath;
+        lock (_pendingChangesLock)
+        {
+            _pendingFilePaths.Add(filePath);
+        }
 
         // 重置防抖定时器（1秒后执行）
         _debounceTimer.Change(1000, Timeout.Infinite);
@@ -106,8 +108,21 @@ internal sealed class FileWatcherService : IDisposable
     /// </summary>
     private void OnDebounce(object? state)
     {
-        if (_disposed || !_pendingChangeType.HasValue || string.IsNullOrEmpty(_pendingFilePath))
+        if (_disposed)
             return;
+
+        // 获取所有待处理的文件（在锁内复制并清空）
+        string[] filesToProcess;
+        lock (_pendingChangesLock)
+        {
+            if (_pendingFilePaths.Count == 0)
+                return;
+
+            filesToProcess = _pendingFilePaths.ToArray();
+            _pendingFilePaths.Clear();
+        }
+
+        _logger.LogInformation("Processing {Count} file change(s)", filesToProcess.Length);
 
         // 确保不会同时处理多个变化
         if (!_processingLock.Wait(0))
@@ -115,21 +130,30 @@ internal sealed class FileWatcherService : IDisposable
 
         try
         {
-            var changeType = _pendingChangeType.Value;
-            var filePath = _pendingFilePath;
-
-            // 清除待处理状态
-            _pendingChangeType = null;
-            _pendingFilePath = null;
-
-            _logger.LogInformation("Processing file change: {Type} - {Path}", changeType, filePath);
-
             // 在后台线程中执行异步操作
-            _ = Task.Run(async () => await _onFileChanged(changeType, filePath, CancellationToken.None));
+            _ = Task.Run(async () =>
+            {
+                foreach (var filePath in filesToProcess)
+                {
+                    try
+                    {
+                        var changeType = GetChangeType(filePath);
+                        if (changeType.HasValue)
+                        {
+                            _logger.LogInformation("Processing file change: {Type} - {Path}", changeType.Value, filePath);
+                            await _onFileChanged(changeType.Value, filePath, CancellationToken.None);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing file change: {Path}", filePath);
+                    }
+                }
+            });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing file change");
+            _logger.LogError(ex, "Error processing file changes");
         }
         finally
         {
