@@ -145,6 +145,7 @@ public static class SymbolFormatter
 
     /// <summary>
     /// 格式化单个符号（详细版，用于单个符号展示）
+    /// 使用完整方法显示格式（选项B）
     /// </summary>
     public static string FormatSymbolDetailed(SymbolInfo symbol, string? relativePath = null, bool includeBody = true, int? bodyMaxLines = null, int totalLines = 0)
     {
@@ -177,34 +178,73 @@ public static class SymbolFormatter
         }
         sb.AppendLine();
 
-        // Declaration
-        sb.AppendLine("**Declaration**:");
-        sb.AppendLine("```csharp");
-        sb.AppendLine(GetFullDeclaration(symbol) + ";");
-        sb.AppendLine("```");
-        sb.AppendLine();
-
-        // Documentation
-        if (!string.IsNullOrEmpty(symbol.Documentation))
+        // If we have FullDeclaration (complete method), show it
+        if (!string.IsNullOrEmpty(symbol.FullDeclaration))
         {
-            sb.AppendLine("**Documentation**:");
-            sb.AppendLine(symbol.Documentation);
-            sb.AppendLine();
-        }
+            // Show attributes if present
+            if (symbol.Attributes.Count > 0)
+            {
+                sb.AppendLine("**Attributes**:");
+                foreach (var attr in symbol.Attributes)
+                {
+                    sb.AppendLine($"- `{attr}`");
+                }
+                sb.AppendLine();
+            }
 
-        // Source body (for methods/properties)
-        if (includeBody && !string.IsNullOrEmpty(symbol.SourceCode))
-        {
-            sb.AppendLine("**Implementation**:");
+            // Show full method (option B - complete method display)
+            sb.AppendLine("**Full Method**:");
             sb.AppendLine("```csharp");
-            sb.AppendLine(symbol.SourceCode);
-            sb.AppendLine("```");
 
+            // Check if we need to truncate
             if (bodyMaxLines.HasValue && totalLines > bodyMaxLines.Value)
             {
-                var linesShown = symbol.SourceCode.Split('\n').Length;
-                var remaining = totalLines - linesShown;
-                sb.AppendLine($"*... {remaining} more lines hidden*");
+                // Show truncated version
+                var lines = symbol.FullDeclaration.Split('\n');
+                for (int i = 0; i < Math.Min(bodyMaxLines.Value, lines.Length); i++)
+                {
+                    sb.AppendLine(lines[i].TrimEnd());
+                }
+                sb.AppendLine("```");
+                sb.AppendLine($"*... {totalLines - bodyMaxLines.Value} more lines hidden*");
+            }
+            else
+            {
+                sb.AppendLine(symbol.FullDeclaration);
+                sb.AppendLine("```");
+            }
+        }
+        else
+        {
+            // Fallback: Declaration only (no FullDeclaration available)
+            sb.AppendLine("**Declaration**:");
+            sb.AppendLine("```csharp");
+            sb.AppendLine(GetFullDeclaration(symbol) + ";");
+            sb.AppendLine("```");
+            sb.AppendLine();
+
+            // Documentation
+            if (!string.IsNullOrEmpty(symbol.Documentation))
+            {
+                sb.AppendLine("**Documentation**:");
+                sb.AppendLine(symbol.Documentation);
+                sb.AppendLine();
+            }
+
+            // Source body (for methods/properties) - old format
+            if (includeBody && !string.IsNullOrEmpty(symbol.SourceCode))
+            {
+                sb.AppendLine("**Implementation**:");
+                sb.AppendLine("```csharp");
+                sb.AppendLine(symbol.SourceCode);
+                sb.AppendLine("```");
+
+                if (bodyMaxLines.HasValue && totalLines > bodyMaxLines.Value)
+                {
+                    var linesShown = symbol.SourceCode.Split('\n').Length;
+                    var remaining = totalLines - linesShown;
+                    sb.AppendLine($"*... {remaining} more lines hidden*");
+                }
             }
         }
 

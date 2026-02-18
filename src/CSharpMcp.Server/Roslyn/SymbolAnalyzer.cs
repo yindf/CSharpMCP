@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging;
 using CSharpMcp.Server.Models;
 using ModelsSymbolInfo = CSharpMcp.Server.Models.SymbolInfo;
@@ -66,7 +67,19 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
             foreach (var method in methodDeclarations)
             {
                 var symbol = semanticModel.GetDeclaredSymbol(method, cancellationToken);
-                if (symbol != null) symbols.Add(symbol);
+                if (symbol != null)
+                {
+                    // Filter out property accessor methods (get/set)
+                    if (symbol is IMethodSymbol methodSymbol)
+                    {
+                        if (methodSymbol.MethodKind == Microsoft.CodeAnalysis.MethodKind.PropertyGet ||
+                            methodSymbol.MethodKind == Microsoft.CodeAnalysis.MethodKind.PropertySet)
+                        {
+                            continue; // Skip accessor methods
+                        }
+                    }
+                    symbols.Add(symbol);
+                }
             }
 
             foreach (var property in propertyDeclarations)
@@ -350,11 +363,25 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
         // Add source code for full level
         if (detailLevel == DetailLevel.Full)
         {
-            var sourceCode = await ExtractSourceCodeAsync(symbol, true, bodyMaxLines, cancellationToken);
-            result = result with
+            var fullMethodDecl = await ExtractFullMethodDeclarationAsync(symbol, bodyMaxLines, cancellationToken);
+            if (fullMethodDecl != null)
             {
-                SourceCode = sourceCode
-            };
+                result = result with
+                {
+                    FullDeclaration = fullMethodDecl.FullMethodText,
+                    Attributes = fullMethodDecl.Attributes,
+                    SourceCode = fullMethodDecl.Body  // Store body in SourceCode for backward compatibility
+                };
+            }
+            else
+            {
+                // Fallback to old method if full extraction fails
+                var sourceCode = await ExtractSourceCodeAsync(symbol, true, bodyMaxLines, cancellationToken);
+                result = result with
+                {
+                    SourceCode = sourceCode
+                };
+            }
         }
 
         return result;
@@ -522,6 +549,303 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
             _logger.LogError(ex, "Failed to extract source code for symbol: {SymbolName}", symbol.Name);
             return null;
         }
+    }
+
+    /// <summary>
+    /// 提取完整的方法声明（包括 attributes、注释、签名、body）
+    /// </summary>
+    public async Task<FullMethodDeclaration?> ExtractFullMethodDeclarationAsync(
+        ISymbol symbol,
+        int? maxLines,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxRef == null)
+            {
+                return null;
+            }
+
+            var syntaxNode = await syntaxRef.GetSyntaxAsync(cancellationToken);
+            if (syntaxNode == null)
+            {
+                return null;
+            }
+
+            var syntaxTree = syntaxNode.SyntaxTree;
+            var sourceText = await syntaxTree.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            // Extract attributes
+            var attributes = ExtractAttributes(syntaxNode);
+
+            // Extract documentation (leading trivia) - do this BEFORE getting full span
+            var documentation = ExtractDocumentationTrivia(syntaxNode);
+
+            // Find the full span including attributes AND documentation
+            var fullSpan = GetFullSpanIncludingAttributesAndDocumentation(syntaxNode);
+
+            // Extract signature (from method start to body start)
+            var signature = ExtractSignature(syntaxNode);
+
+            // Extract body
+            var body = await ExtractBodyAsync(syntaxNode, maxLines, cancellationToken);
+
+            // Get full method text
+            var startLine = lines.GetLineFromPosition(fullSpan.Start).LineNumber;
+            var endLine = lines.GetLineFromPosition(fullSpan.End).LineNumber;
+
+            // Apply max lines limit
+            if (maxLines.HasValue && (endLine - startLine + 1) > maxLines.Value)
+            {
+                endLine = startLine + maxLines.Value - 1;
+            }
+
+            var fullMethodText = new StringBuilder();
+            for (int i = startLine; i <= endLine; i++)
+            {
+                var line = lines[i];
+                var lineText = line.ToString();
+                fullMethodText.AppendLine(lineText.TrimEnd());
+            }
+
+            return new FullMethodDeclaration(
+                fullMethodText.ToString().Trim(),
+                attributes,
+                documentation,
+                signature,
+                body ?? ""
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to extract full method declaration for symbol: {SymbolName}", symbol.Name);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 提取节点上的所有属性
+    /// </summary>
+    private static IReadOnlyList<string> ExtractAttributes(SyntaxNode syntaxNode)
+    {
+        var attributes = new List<string>();
+
+        // Check for AttributeLists based on node type
+        if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+        {
+            foreach (var attributeList in methodSyntax.AttributeLists)
+            {
+                foreach (var attribute in attributeList.Attributes)
+                {
+                    attributes.Add(attribute.ToString());
+                }
+            }
+        }
+        else if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BasePropertyDeclarationSyntax propertySyntax)
+        {
+            foreach (var attributeList in propertySyntax.AttributeLists)
+            {
+                foreach (var attribute in attributeList.Attributes)
+                {
+                    attributes.Add(attribute.ToString());
+                }
+            }
+        }
+
+        return attributes;
+    }
+
+    /// <summary>
+    /// 提取文档注释（XML 注释）
+    /// </summary>
+    private static string? ExtractDocumentationTrivia(Microsoft.CodeAnalysis.SyntaxNode syntaxNode)
+    {
+        var triviaList = syntaxNode.GetLeadingTrivia()
+            .Reverse()
+            .TakeWhile(t => t.Kind() is Microsoft.CodeAnalysis.CSharp.SyntaxKind.SingleLineCommentTrivia ||
+                           t.Kind() is Microsoft.CodeAnalysis.CSharp.SyntaxKind.MultiLineCommentTrivia ||
+                           t.Kind() is Microsoft.CodeAnalysis.CSharp.SyntaxKind.SingleLineDocumentationCommentTrivia ||
+                           t.Kind() is Microsoft.CodeAnalysis.CSharp.SyntaxKind.MultiLineDocumentationCommentTrivia ||
+                           t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EndOfLineTrivia))
+            .Reverse();
+
+        if (!triviaList.Any())
+            return null;
+
+        var docComments = new List<string>();
+        foreach (var trivia in triviaList)
+        {
+            var text = trivia.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(text) || text == "//" || text == "/*" || text == "*/")
+                continue;
+
+            // Clean up documentation comment markers
+            if (text.StartsWith("///"))
+                docComments.Add(text.Substring(3).Trim());
+            else if (text.StartsWith("//"))
+                docComments.Add(text.Substring(2).Trim());
+            else if (text.StartsWith("/*") && text.EndsWith("*/"))
+                docComments.Add(text.Substring(2, text.Length - 4).Trim());
+            else
+                docComments.Add(text);
+        }
+
+        return docComments.Count > 0 ? string.Join("\n", docComments) : null;
+    }
+
+    /// <summary>
+    /// 获取完整的 span（包括属性和文档注释）
+    /// </summary>
+    private static TextSpan GetFullSpanIncludingAttributesAndDocumentation(SyntaxNode syntaxNode)
+    {
+        var fullStart = syntaxNode.Span.Start;
+
+        // Check for AttributeLists based on node type
+        if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+        {
+            if (methodSyntax.AttributeLists.Count > 0)
+            {
+                fullStart = methodSyntax.AttributeLists[0].FullSpan.Start;
+            }
+
+            // Check for documentation comments before attributes
+            var leadingTrivia = methodSyntax.GetLeadingTrivia();
+            foreach (var trivia in leadingTrivia)
+            {
+                if (trivia.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                    trivia.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.MultiLineDocumentationCommentTrivia))
+                {
+                    if (trivia.FullSpan.Start < fullStart)
+                    {
+                        fullStart = trivia.FullSpan.Start;
+                    }
+                }
+            }
+        }
+        else if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BasePropertyDeclarationSyntax propertySyntax)
+        {
+            if (propertySyntax.AttributeLists.Count > 0)
+            {
+                fullStart = propertySyntax.AttributeLists[0].FullSpan.Start;
+            }
+
+            // Check for documentation comments before attributes
+            var leadingTrivia = propertySyntax.GetLeadingTrivia();
+            foreach (var trivia in leadingTrivia)
+            {
+                if (trivia.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                    trivia.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.MultiLineDocumentationCommentTrivia))
+                {
+                    if (trivia.FullSpan.Start < fullStart)
+                    {
+                        fullStart = trivia.FullSpan.Start;
+                    }
+                }
+            }
+        }
+
+        return TextSpan.FromBounds(fullStart, syntaxNode.Span.End);
+    }
+
+    /// <summary>
+    /// 提取方法签名
+    /// </summary>
+    private static string ExtractSignature(Microsoft.CodeAnalysis.SyntaxNode syntaxNode)
+    {
+        if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+        {
+            // From method start to end of parameter list (or semicolon for abstract/interface methods)
+            var signatureEnd = methodSyntax.Body != null
+                ? methodSyntax.ParameterList.Span.End
+                : methodSyntax.SemicolonToken != default && !methodSyntax.SemicolonToken.IsMissing
+                    ? methodSyntax.SemicolonToken.Span.End
+                    : methodSyntax.Span.End;
+
+            var signatureSpan = TextSpan.FromBounds(methodSyntax.Span.Start, signatureEnd);
+            return syntaxNode.SyntaxTree.GetText().ToString(signatureSpan).Trim();
+        }
+        else if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BasePropertyDeclarationSyntax propertySyntax)
+        {
+            // For properties, get up to the accessor list or end
+            var signatureEnd = propertySyntax.AccessorList != null
+                ? propertySyntax.AccessorList.Span.Start
+                : propertySyntax.Span.End;
+
+            var signatureSpan = TextSpan.FromBounds(propertySyntax.Span.Start, signatureEnd);
+            return syntaxNode.SyntaxTree.GetText().ToString(signatureSpan).Trim();
+        }
+
+        return syntaxNode.ToString();
+    }
+
+    /// <summary>
+    /// 提取方法 body
+    /// </summary>
+    private static async Task<string?> ExtractBodyAsync(
+        Microsoft.CodeAnalysis.SyntaxNode syntaxNode,
+        int? maxLines,
+        CancellationToken cancellationToken)
+    {
+        if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+        {
+            var body = methodSyntax.Body;
+            if (body == null)
+            {
+                // Abstract or interface method
+                return null;
+            }
+
+            var syntaxTree = syntaxNode.SyntaxTree;
+            var sourceText = await syntaxTree.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            // Get content inside the braces
+            var openBrace = body.ChildTokens().FirstOrDefault(t => t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OpenBraceToken));
+            var closeBrace = body.ChildTokens().LastOrDefault(t => t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CloseBraceToken));
+
+            TextSpan bodySpan;
+            if (openBrace != default && closeBrace != default)
+            {
+                bodySpan = TextSpan.FromBounds(openBrace.Span.End, closeBrace.Span.Start);
+            }
+            else
+            {
+                bodySpan = body.Span;
+            }
+
+            var startLine = lines.GetLineFromPosition(bodySpan.Start).LineNumber;
+            var endLine = lines.GetLineFromPosition(bodySpan.End).LineNumber;
+
+            // Apply max lines limit
+            if (maxLines.HasValue && (endLine - startLine + 1) > maxLines.Value)
+            {
+                endLine = startLine + maxLines.Value - 1;
+            }
+
+            var sb = new StringBuilder();
+            for (int i = startLine; i <= endLine; i++)
+            {
+                var line = lines[i];
+                var lineText = line.ToString();
+                sb.AppendLine(lineText.TrimEnd());
+            }
+
+            return sb.ToString().Trim();
+        }
+        else if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BasePropertyDeclarationSyntax propertySyntax)
+        {
+            var accessorList = propertySyntax.AccessorList;
+            if (accessorList == null)
+            {
+                return null;
+            }
+
+            return accessorList.ToString();
+        }
+
+        return null;
     }
 
     private static ModelsSymbolKind MapSymbolKind(RoslynSymbolKind kind)

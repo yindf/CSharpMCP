@@ -54,6 +54,17 @@ public record SymbolInfo
     public string? SourceCode { get; init; }
     public string? LineText { get; init; }
 
+    /// <summary>
+    /// 完整的方法声明（包括 attributes、签名、注释）
+    /// 用于详细输出时显示完整方法
+    /// </summary>
+    public string? FullDeclaration { get; init; }
+
+    /// <summary>
+    /// 方法上的属性列表
+    /// </summary>
+    public IReadOnlyList<string> Attributes { get; init; } = [];
+
     // 关系信息
     public IReadOnlyList<SymbolReference> References { get; init; } = [];
     public IReadOnlyList<SymbolInfo> RelatedSymbols { get; init; } = [];
