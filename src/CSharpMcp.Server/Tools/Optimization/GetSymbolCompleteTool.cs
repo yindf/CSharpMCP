@@ -44,7 +44,7 @@ public class GetSymbolCompleteTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
             if (symbol == null)
             {
                 logger.LogWarning("Symbol not found: {SymbolName}", parameters.SymbolName ?? "at specified location");
@@ -54,8 +54,8 @@ public class GetSymbolCompleteTool
             // Build complete Markdown
             var result = await BuildCompleteMarkdownAsync(
                 symbol,
-                document,
                 parameters,
+                workspaceManager.GetCurrentSolution(),
                 inheritanceAnalyzer,
                 logger,
                 cancellationToken);
@@ -73,8 +73,8 @@ public class GetSymbolCompleteTool
 
     private static async Task<string> BuildCompleteMarkdownAsync(
         ISymbol symbol,
-        Document document,
         GetSymbolCompleteParams parameters,
+        Solution solution,
         IInheritanceAnalyzer inheritanceAnalyzer,
         ILogger<GetSymbolCompleteTool> logger,
         CancellationToken cancellationToken)
@@ -179,7 +179,6 @@ public class GetSymbolCompleteTool
         {
             try
             {
-                var solution = document.Project.Solution;
                 var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
                     symbol,
                     solution,
@@ -226,7 +225,6 @@ public class GetSymbolCompleteTool
             {
                 try
                 {
-                    var solution = document.Project.Solution;
                     var tree = await inheritanceAnalyzer.GetInheritanceTreeAsync(
                         type,
                         solution,
@@ -274,7 +272,6 @@ public class GetSymbolCompleteTool
             {
                 try
                 {
-                    var solution = document.Project.Solution;
                     sb.Append(await method.GetCallGraphMarkdown(solution, cancellationToken));
                 }
                 catch (Exception ex)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using CSharpMcp.Server.Models.Tools;
 using CSharpMcp.Server.Roslyn;
+using Microsoft.CodeAnalysis.FindSymbols;
 
 namespace CSharpMcp.Server.Tools.Essential;
 
@@ -40,7 +42,7 @@ public class ResolveSymbolTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
             if (symbol == null)
             {
                 var errorDetails = await BuildErrorDetails(parameters, workspaceManager, cancellationToken);
@@ -49,7 +51,7 @@ public class ResolveSymbolTool
             }
 
             // Build Markdown directly
-            var result = await BuildSymbolMarkdownAsync(symbol, parameters, document, symbolAnalyzer, cancellationToken);
+            var result = await BuildSymbolMarkdownAsync(symbol, parameters, workspaceManager.GetCurrentSolution(), cancellationToken);
 
             logger.LogDebug("Resolved symbol: {SymbolName}", symbol.Name);
 
@@ -65,7 +67,7 @@ public class ResolveSymbolTool
     private static async Task<string> BuildSymbolMarkdownAsync(
         ISymbol symbol,
         ResolveSymbolParams parameters,
-        Document document,
+        Solution solution,
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
@@ -141,11 +143,10 @@ public class ResolveSymbolTool
         // References (limited)
         try
         {
-            var solution = document.Project.Solution;
-            var referencedSymbols = await symbolAnalyzer.FindReferencesAsync(
+            var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
                 symbol,
                 solution,
-                cancellationToken);
+                cancellationToken)).ToImmutableList();
 
             if (referencedSymbols.Count > 0)
             {
@@ -215,7 +216,7 @@ public class ResolveSymbolTool
         details.AppendLine("## Symbol Not Found");
         details.AppendLine();
         details.AppendLine($"**File**: `{parameters.FilePath}`");
-        details.AppendLine($"**Line Number**: {parameters.LineNumber?.ToString() ?? "Not specified"}");
+        details.AppendLine($"**Line Number**: {parameters.LineNumber.ToString() ?? "Not specified"}");
         details.AppendLine($"**Symbol Name**: `{parameters.SymbolName ?? "Not specified"}`");
         details.AppendLine();
 
@@ -226,13 +227,13 @@ public class ResolveSymbolTool
                 .SelectMany(p => p.Documents)
                 .FirstOrDefault(d => d.FilePath == parameters.FilePath);
 
-            if (document != null && parameters.LineNumber.HasValue)
+            if (document != null)
             {
                 var sourceText = await document.GetTextAsync(cancellationToken);
                 if (sourceText != null)
                 {
-                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber.Value - 1);
-                    if (line.LineNumber >= 0)
+                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber - 1);
+                    if (parameters.LineNumber >= 0)
                     {
                         details.AppendLine("**Line Content**:");
                         details.AppendLine("```csharp");

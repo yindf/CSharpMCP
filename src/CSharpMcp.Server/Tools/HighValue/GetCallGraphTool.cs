@@ -39,9 +39,9 @@ public class GetCallGraphTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the method symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(
+            var symbol = await parameters.ResolveSymbolAsync(
                 workspaceManager,
-                preferredKind: SymbolExtensions.SymbolKindPreference.Method,
+                SymbolFilter.Member,
                 cancellationToken);
             if (symbol == null)
             {
@@ -55,7 +55,7 @@ public class GetCallGraphTool
                 return GetNotAMethodHelpResponse(symbol.Name, symbol.Kind.ToString(), parameters.FilePath, parameters.LineNumber);
             }
 
-            var solution = document.Project.Solution;
+            var solution = workspaceManager.GetCurrentSolution();
 
             // Build Markdown directly
             return await method.GetCallGraphMarkdown(solution, cancellationToken);

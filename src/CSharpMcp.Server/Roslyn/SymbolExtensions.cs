@@ -712,23 +712,26 @@ public static class SymbolExtensions
     /// <summary>
     /// Resolve symbol from FileLocationParams
     /// </summary>
-    public static async Task<(ISymbol? symbol, Document document)> ResolveSymbolFromLocationAsync(
+    public static async Task<ISymbol> ResolveSymbolAsync(
         this FileLocationParams location,
         IWorkspaceManager workspaceManager,
         SymbolFilter filter = SymbolFilter.TypeAndMember,
         CancellationToken cancellationToken = default)
     {
-        var document = await workspaceManager.GetDocumentAsync(location.FilePath, cancellationToken);
-        if (document == null)
-        {
-            return (null, null!);
-        }
+        var symbols = await SymbolFinder.FindSourceDeclarationsAsync(workspaceManager.GetCurrentSolution(), location.SymbolName, true,
+            filter, cancellationToken);
 
-        ISymbol? symbol = null;
+        symbols = symbols.OrderBy(s => s.Locations.Sum(loc =>
+            (loc.GetLineSpan().Path.ToLowerInvariant().Contains(location.FilePath.ToLowerInvariant()) ? 0 : 10000) +
+            Math.Abs(loc.GetLineSpan().StartLinePosition.Line - location.LineNumber)));
 
+        return symbols.FirstOrDefault();
+    }
 
-
-        return (symbol, document);
+    public static Document GetDocument(this ISymbol symbol, Solution solution)
+    {
+        var syntaxTree = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree;
+        return syntaxTree == null ? null : solution.GetDocument(syntaxTree);
     }
 
     public static bool WildcardMatch(string input, string pattern)

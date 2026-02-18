@@ -39,13 +39,17 @@ public class GoToDefinitionTool
             logger.LogDebug("Going to definition: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
-            parameters.ResolveSymbolFromLocationAsync(workspaceManager, SymbolExtensions.SymbolKindPreference.None)
+            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, SymbolFilter.TypeAndMember, cancellationToken);
+            if (symbol == null)
+            {
+                // 构建详细的错误信息
+                var errorDetails = BuildErrorDetails(parameters, workspaceManager, logger, cancellationToken);
+                logger.LogWarning("Symbol not found: {Details}", errorDetails);
 
-            // 构建详细的错误信息
-            var errorDetails = BuildErrorDetails(parameters, workspaceManager, logger, cancellationToken);
-            logger.LogWarning("Symbol not found: {Details}", errorDetails);
+                throw new FileNotFoundException(errorDetails);
+            }
 
-            throw new FileNotFoundException(errorDetails);
+            return await CreateResponseAsync(symbol, parameters, logger, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -149,7 +153,7 @@ public class GoToDefinitionTool
         details.AppendLine($"## Symbol Not Found");
         details.AppendLine();
         details.AppendLine($"**File**: `{parameters.FilePath}`");
-        details.AppendLine($"**Line Number**: {parameters.LineNumber?.ToString() ?? "Not specified"}");
+        details.AppendLine($"**Line Number**: {parameters.LineNumber.ToString() ?? "Not specified"}");
         details.AppendLine($"**Symbol Name**: `{parameters.SymbolName ?? "Not specified"}`");
         details.AppendLine();
 
@@ -160,13 +164,13 @@ public class GoToDefinitionTool
                 .SelectMany(p => p.Documents)
                 .FirstOrDefault(d => d.FilePath == parameters.FilePath);
 
-            if (document != null && parameters.LineNumber.HasValue)
+            if (document != null && parameters.LineNumber > 0)
             {
                 var sourceText = document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
                 if (sourceText != null)
                 {
-                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber.Value - 1);
-                    if (line.LineNumber >= 0)
+                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber - 1);
+                    if (line.LineNumber > 0)
                     {
                         details.AppendLine($"**Line Content**:");
                         details.AppendLine($"```csharp");

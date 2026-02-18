@@ -50,7 +50,7 @@ public class BatchGetSymbolsTool
                     await semaphore.WaitAsync(cancellationToken);
                     try
                     {
-                        var (symbol, _) = await symbolParams.ResolveSymbolFromLocationAsync(workspaceManager, cancellationToken: cancellationToken);
+                        var symbol = await symbolParams.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
                         if (symbol == null)
                         {
                             return new SymbolBatchResult(

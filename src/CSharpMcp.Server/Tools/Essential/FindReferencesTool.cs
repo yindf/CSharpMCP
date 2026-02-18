@@ -43,7 +43,7 @@ public class FindReferencesTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // First, resolve the symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(workspaceManager, cancellationToken: cancellationToken);
+            var symbol = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
             if (symbol == null)
             {
                 var errorDetails = BuildErrorDetails(parameters, workspaceManager, cancellationToken);
@@ -52,7 +52,7 @@ public class FindReferencesTool
             }
 
             // Get the solution
-            var solution = document.Project.Solution;
+            var solution = workspaceManager.GetCurrentSolution();
 
             // Find references
             var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
@@ -167,7 +167,7 @@ public class FindReferencesTool
         details.AppendLine($"## Symbol Not Found");
         details.AppendLine();
         details.AppendLine($"**File**: `{parameters.FilePath}`");
-        details.AppendLine($"**Line Number**: {parameters.LineNumber?.ToString() ?? "Not specified"}");
+        details.AppendLine($"**Line Number**: {parameters.LineNumber.ToString() ?? "Not specified"}");
         details.AppendLine($"**Symbol Name**: `{parameters.SymbolName ?? "Not specified"}`");
         details.AppendLine();
 
@@ -178,13 +178,13 @@ public class FindReferencesTool
                 .SelectMany(p => p.Documents)
                 .FirstOrDefault(d => d.FilePath == parameters.FilePath);
 
-            if (document != null && parameters.LineNumber.HasValue)
+            if (document != null && parameters.LineNumber > 0)
             {
                 var sourceText = document.GetTextAsync(cancellationToken).GetAwaiter().GetResult();
                 if (sourceText != null)
                 {
-                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber.Value - 1);
-                    if (line.LineNumber >= 0)
+                    var line = sourceText.Lines.FirstOrDefault(l => l.LineNumber == parameters.LineNumber - 1);
+                    if (line.LineNumber > 0)
                     {
                         details.AppendLine($"**Line Content**:");
                         details.AppendLine($"```csharp");

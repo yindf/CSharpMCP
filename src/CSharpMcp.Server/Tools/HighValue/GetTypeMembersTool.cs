@@ -39,9 +39,9 @@ public class GetTypeMembersTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the type symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(
-                workspaceManager, symbolAnalyzer,
-                preferredKind: SymbolExtensions.SymbolKindPreference.NamedType,
+            var symbol = await parameters.ResolveSymbolAsync(
+                workspaceManager,
+                SymbolFilter.Type,
                 cancellationToken);
             if (symbol == null)
             {

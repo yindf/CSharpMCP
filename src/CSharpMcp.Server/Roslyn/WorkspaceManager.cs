@@ -363,10 +363,6 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     {
         return await SymbolFinder.FindSourceDeclarationsWithPatternAsync(_workspace.CurrentSolution, query, SymbolFilter.TypeAndMember);
 
-        SymbolFinder.FindSourceDeclarationsAsync(
-            document,
-            SymbolFilter.TypeAndMember);
-
         IEnumerable<ISymbol> symbols = Enumerable.Empty<ISymbol>();
 
         foreach (var project in _workspace.CurrentSolution.Projects)

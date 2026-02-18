@@ -39,9 +39,9 @@ public class GetInheritanceHierarchyTool
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the type symbol
-            var (symbol, document) = await parameters.ResolveSymbolFromLocationAsync(
+            var symbol = await parameters.ResolveSymbolAsync(
                 workspaceManager,
-                preferredKind: SymbolExtensions.SymbolKindPreference.NamedType,
+                SymbolFilter.Type,
                 cancellationToken);
             if (symbol == null)
             {
@@ -56,7 +56,7 @@ public class GetInheritanceHierarchyTool
             }
 
             // Get the solution
-            var solution = document.Project.Solution;
+            var solution = workspaceManager.GetCurrentSolution();
 
             // Use default max depth of 3 if not specified (0 means not specified in JSON)
             var maxDepth = parameters.MaxDerivedDepth > 0 ? parameters.MaxDerivedDepth : 3;
