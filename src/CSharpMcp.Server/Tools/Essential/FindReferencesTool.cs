@@ -71,7 +71,7 @@ public class FindReferencesTool
             logger.LogInformation("Found {Count} references for {SymbolName}", referencedSymbols.Count, symbol.Name);
 
             // Build Markdown directly
-            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, cancellationToken);
+            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, parameters.Compact, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -93,14 +93,13 @@ public class FindReferencesTool
     private static async Task<string> BuildReferencesMarkdownAsync(
         ISymbol symbol,
         IReadOnlyList<ReferencedSymbol> referencedSymbols,
+        bool compact,
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
         var displayName = symbol.GetDisplayName();
 
         sb.AppendLine($"## References: `{displayName}`");
-        sb.AppendLine();
-        sb.AppendLine($"**Found {referencedSymbols.Count} reference location{(referencedSymbols.Count != 1 ? "s" : "")}**");
         sb.AppendLine();
 
         // Group by file
@@ -111,6 +110,26 @@ public class FindReferencesTool
                 Definition = rs.Definition
             }))
             .GroupBy(r => r.ReferenceLocation.Document.FilePath);
+
+        // Calculate total references correctly
+        long totalRefs = groupedByFile.Sum(g => g.Count());
+
+        if (compact)
+        {
+            sb.AppendLine($"**Total**: {totalRefs} references across {groupedByFile.Count()} file{(groupedByFile.Count() != 1 ? "s" : "")}");
+            sb.AppendLine();
+
+            foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
+            {
+                var fileName = Path.GetFileName(fileGroup.Key);
+                var count = fileGroup.Count();
+                sb.AppendLine($"- `{fileName}`: {count} reference{(count != 1 ? "s" : "")}");
+            }
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"**Total References**: {totalRefs} in {referencedSymbols.Count} location{(referencedSymbols.Count != 1 ? "s" : "")}**");
+        sb.AppendLine();
 
         foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
         {
@@ -136,11 +155,6 @@ public class FindReferencesTool
 
         // Summary
         sb.AppendLine("**Summary**:");
-        long totalRefs = 0;
-        foreach (var rs in referencedSymbols)
-        {
-            totalRefs += rs.Locations.Count();
-        }
         var filesAffected = groupedByFile.Count();
 
         sb.AppendLine($"- **Total References**: {totalRefs}");

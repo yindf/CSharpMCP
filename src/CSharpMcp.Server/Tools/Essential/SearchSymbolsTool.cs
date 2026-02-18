@@ -107,6 +107,9 @@ public class SearchSymbolsTool
                 return GetNoResultsHelpResponse(parameters.Query, parameters.Query, errorCount > 0);
             }
 
+            // Apply sorting
+            results = SortResults(results, parameters.Query, parameters.SortBy).ToList();
+
             // Build Markdown directly
             return BuildSearchResultsMarkdown(parameters.Query, results);
         }
@@ -180,6 +183,49 @@ public class SearchSymbolsTool
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Sort results by specified criteria
+    /// </summary>
+    private static List<ISymbol> SortResults(List<ISymbol> results, string query, string sortBy)
+    {
+        return sortBy.ToLowerInvariant() switch
+        {
+            "name" => results.OrderBy(s => s.GetDisplayName()).ToList(),
+            "kind" => results.OrderBy(s => s.Kind.ToString()).ThenBy(s => s.GetDisplayName()).ToList(),
+            "relevance" or _ => SortByRelevance(results, query).ToList()
+        };
+    }
+
+    /// <summary>
+    /// Sort by relevance - prioritize types, exact matches, and prefix matches
+    /// </summary>
+    private static IEnumerable<ISymbol> SortByRelevance(List<ISymbol> symbols, string query)
+    {
+        bool hasWildcard = query.Contains('*');
+        bool isExactMatch = !hasWildcard;
+
+        return symbols.OrderByDescending(s =>
+        {
+            int score = 0;
+
+            // Type symbols rank higher
+            if (s is INamedTypeSymbol) score += 1000;
+            else if (s is IMethodSymbol) score += 500;
+            else if (s is IPropertySymbol) score += 200;
+            // Fields/Events rank lower
+
+            // Exact name match ranks higher
+            if (isExactMatch && string.Equals(s.Name, query, StringComparison.OrdinalIgnoreCase))
+                score += 500;
+
+            // Name starts with query ranks higher
+            if (s.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                score += 200;
+
+            return score;
+        }).ThenBy(s => s.Name);
     }
 
     /// <summary>

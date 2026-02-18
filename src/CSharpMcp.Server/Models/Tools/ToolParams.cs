@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using Microsoft.CodeAnalysis;
 
 namespace CSharpMcp.Server.Models.Tools;
 
@@ -51,6 +52,24 @@ public record GetSymbolsParams
     [Description("Maximum number of lines to include for implementation code")]
     public int BodyMaxLines { get; init; } = 100;
 
+    /// <summary>
+    /// Minimum accessibility level to include (default: Private = show all)
+    /// </summary>
+    [Description("Minimum accessibility level: Public, Internal, Protected, Private")]
+    public Accessibility MinVisibility { get; init; } = Accessibility.Private;
+
+    /// <summary>
+    /// Symbol kinds to include (null = all kinds)
+    /// </summary>
+    [Description("Filter by symbol kinds: e.g., NamedType, Method, Property, Field (null = all)")]
+    public string[]? SymbolKinds { get; init; }
+
+    /// <summary>
+    /// Exclude local variables and parameters
+    /// </summary>
+    [Description("Exclude local variables and parameters from output")]
+    public bool ExcludeLocal { get; init; } = true;
+
 }
 
 /// <summary>
@@ -87,6 +106,12 @@ public record FindReferencesParams : FileLocationParams
     /// </summary>
     [Description("Number of lines to show before and after each reference")]
     public int ContextLines { get; init; } = 3;
+
+    /// <summary>
+    /// Compact mode - only shows file names and counts, not individual references
+    /// </summary>
+    [Description("Show only file names and reference counts, not detailed code context")]
+    public bool Compact { get; init; } = false;
 }
 
 /// <summary>
@@ -105,6 +130,12 @@ public record SearchSymbolsParams
     /// </summary>
     [Description("Maximum number of results to return")]
     public int MaxResults { get; init; } = 100;
+
+    /// <summary>
+    /// Sort results by: relevance (default), name, or kind
+    /// </summary>
+    [Description("Sort order: relevance (type>field, exact>wildcard), name, or kind")]
+    public string SortBy { get; init; } = "relevance";
 }
 
 /// <summary>
@@ -123,6 +154,13 @@ public record ResolveSymbolParams : FileLocationParams
     /// </summary>
     [Description("Maximum number of lines to include for implementation code")]
     public int BodyMaxLines { get; init; } = 50;
+
+    /// <summary>
+    /// When true, only return the primary symbol definition (types, methods)
+    /// When false, return all matching symbols (default behavior)
+    /// </summary>
+    [Description("Only return primary symbol definitions (classes, interfaces, methods), excluding fields/properties")]
+    public bool PrimaryOnly { get; init; } = true;
 }
 
 /// <summary>

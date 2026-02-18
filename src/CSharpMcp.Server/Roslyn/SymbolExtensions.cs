@@ -410,10 +410,13 @@ public static class SymbolExtensions
         // Callers
         foreach (var caller in callers.Take(maxCaller))
         {
-            sb.AppendLine($"- **{caller.CallingSymbol.GetSignature()}** {caller.CallingSymbol.GetLineRange()}");
+            var signature = caller.CallingSymbol.GetSignature();
+            var (start, end) = caller.CallingSymbol.GetLineRange();
+            sb.AppendLine($"- **{signature}** L{start}-{end}");
+
             foreach (var location in caller.Locations)
             {
-                sb.AppendLine($"`{location.GetLineContent()}` - {location.ToFileNameWithLineNumber()}");
+                sb.AppendLine($"  - `{location.GetLineContent()}` {location.ToFileNameWithLineNumber()}");
             }
         }
 
@@ -428,11 +431,13 @@ public static class SymbolExtensions
         sb.AppendLine($"- Callees: {calleeCount} shown (of {callees.Length} total, maxCallee={maxCallee})");
         sb.AppendLine();
 
-        // Callees
+        // Callees - unified format with callers
         foreach (var callee in callees.Take(maxCallee))
         {
-            sb.AppendLine(callee.Method.GetSignature());
-            sb.AppendLine($"  - `{callee.SourceText}` {callee.FileLinePositionSpan.ToFileNameWithLineNumber()}");
+            var signature = callee.Method.GetSignature();
+            var (start, end) = callee.Method.GetLineRange();
+            sb.AppendLine($"- **{signature}** L{start}-{end}");
+            sb.AppendLine($"  - `{callee.SourceText.ToString().Trim()}` {callee.FileLinePositionSpan.ToFileNameWithLineNumber()}");
         }
 
         if (callees.Length > maxCallee)

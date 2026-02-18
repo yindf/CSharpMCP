@@ -51,6 +51,13 @@ public class GoToDefinitionTool
 
             // Resolve the symbol
             var symbols = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
+
+            // Apply PrimaryOnly filter if enabled
+            if (parameters.PrimaryOnly)
+            {
+                symbols = symbols.Where(s => s is INamedTypeSymbol or IMethodSymbol).ToImmutableList();
+            }
+
             if (symbols == null || !symbols.Any())
             {
                 var errorDetails = await BuildErrorDetails(parameters, workspaceManager, cancellationToken);

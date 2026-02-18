@@ -64,6 +64,11 @@ public class GetSymbolsTool
 
             var symbols = (await document.GetDeclaredSymbolsAsync(cancellationToken)).ToImmutableList();
 
+            // Apply filters
+            symbols = ApplyFilters(symbols, parameters);
+
+            logger.LogDebug("Found {Count} symbols in {FilePath}", symbols.Count, parameters.FilePath);
+
             logger.LogDebug("Found {Count} symbols in {FilePath}", symbols.Count, parameters.FilePath);
 
             // Build Markdown directly
@@ -132,5 +137,59 @@ public class GetSymbolsTool
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Apply visibility, kind, and local filters to the symbol list
+    /// </summary>
+    private static ImmutableList<ISymbol> ApplyFilters(ImmutableList<ISymbol> symbols, GetSymbolsParams parameters)
+    {
+        // Filter out implicitly declared symbols first
+        var filtered = symbols.Where(s => !s.IsImplicitlyDeclared);
+
+        // Apply visibility filter
+        if (parameters.MinVisibility > Accessibility.Private)
+        {
+            filtered = FilterByAccessibility(filtered, parameters.MinVisibility);
+        }
+
+        // Apply symbol kind filter
+        if (parameters.SymbolKinds != null && parameters.SymbolKinds.Length > 0)
+        {
+            var kinds = parameters.SymbolKinds.Select(ParseSymbolKind).ToHashSet();
+            filtered = filtered.Where(s => kinds.Contains(s.Kind));
+        }
+
+        // Exclude local variables and parameters
+        if (parameters.ExcludeLocal)
+        {
+            filtered = filtered.Where(s => s.Kind != SymbolKind.Local && s.Kind != SymbolKind.Parameter);
+        }
+
+        return filtered.ToImmutableList();
+    }
+
+    /// <summary>
+    /// Filter symbols by minimum accessibility level
+    /// </summary>
+    private static IEnumerable<ISymbol> FilterByAccessibility(IEnumerable<ISymbol> symbols, Accessibility minLevel)
+    {
+        var accessibilityOrder = new[] { Accessibility.Private, Accessibility.Protected, Accessibility.Internal, Accessibility.Public };
+        var minIndex = Array.IndexOf(accessibilityOrder, minLevel);
+
+        return symbols.Where(s =>
+        {
+            var accessibility = s.DeclaredAccessibility;
+            var index = Array.IndexOf(accessibilityOrder, accessibility);
+            return index >= minIndex || accessibility == Accessibility.ProtectedAndInternal;
+        });
+    }
+
+    /// <summary>
+    /// Parse string to SymbolKind
+    /// </summary>
+    private static SymbolKind ParseSymbolKind(string kind)
+    {
+        return Enum.TryParse<SymbolKind>(kind, ignoreCase: true, out var result) ? result : SymbolKind.Namespace;
     }
 }
