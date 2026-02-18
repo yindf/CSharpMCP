@@ -1,5 +1,7 @@
 # CSharp MCP Server - API 文档
 
+**中文** | [**English**](API.en.md)
+
 ## 概述
 
 CSharp MCP Server 是一个基于 Roslyn 的 Model Context Protocol (MCP) Server，提供强大的 C# 代码分析和导航功能。
