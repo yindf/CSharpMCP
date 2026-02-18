@@ -37,6 +37,13 @@ public class SearchSymbolsTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Search Symbols");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             if (string.IsNullOrWhiteSpace(parameters.Query))
             {
                 return GetErrorHelpResponse("Search query cannot be empty. Please provide a search term.");

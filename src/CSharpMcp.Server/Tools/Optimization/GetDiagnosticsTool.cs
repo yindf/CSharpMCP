@@ -38,6 +38,13 @@ public class GetDiagnosticsTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Diagnostics");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Getting diagnostics for: {FilePath}", parameters.FilePath ?? "entire workspace");
 
             var diagnostics = new List<DiagnosticItem>();

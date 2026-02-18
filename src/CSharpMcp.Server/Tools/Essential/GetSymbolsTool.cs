@@ -45,6 +45,13 @@ public class GetSymbolsTool
                 return GetErrorHelpResponse($"Failed to get symbols: parameters == null");
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Symbols");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogDebug("Getting symbols for: {FilePath}", parameters.FilePath);
 
             var document = await workspaceManager.GetDocumentAsync(parameters.FilePath, cancellationToken);

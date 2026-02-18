@@ -39,12 +39,19 @@ public class GoToDefinitionTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Go To Definition");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Resolving symbol: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
             // Resolve the symbol
             var symbols = await parameters.ResolveSymbolAsync(workspaceManager, cancellationToken: cancellationToken);
-            if (symbols == null)
+            if (symbols == null || !symbols.Any())
             {
                 var errorDetails = await BuildErrorDetails(parameters, workspaceManager, cancellationToken);
                 logger.LogWarning("Symbol not found: {Details}", errorDetails);

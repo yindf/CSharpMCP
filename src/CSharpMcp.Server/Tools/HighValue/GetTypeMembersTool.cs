@@ -36,6 +36,13 @@ public class GetTypeMembersTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Type Members");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 

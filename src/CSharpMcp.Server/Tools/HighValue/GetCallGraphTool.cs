@@ -36,6 +36,13 @@ public class GetCallGraphTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Call Graph");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Getting call graph: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 

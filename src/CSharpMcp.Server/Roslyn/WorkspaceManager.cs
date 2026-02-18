@@ -479,6 +479,11 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         return UserProjects;
     }
 
+    /// <summary>
+    /// 获取工作区是否已加载
+    /// </summary>
+    public bool IsWorkspaceLoaded => _currentSolution != null;
+
     public void Dispose()
     {
         StopFileWatcher();

@@ -40,6 +40,13 @@ public class FindReferencesTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Find References");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 

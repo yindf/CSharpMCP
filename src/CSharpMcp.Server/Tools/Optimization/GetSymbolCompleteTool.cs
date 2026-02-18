@@ -41,6 +41,13 @@ public class GetSymbolCompleteTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Get Symbol Complete");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
                 parameters.FilePath, parameters.LineNumber, parameters.SymbolName);
 
@@ -218,23 +225,37 @@ public class GetSymbolCompleteTool
                     sb.AppendLine();
 
                     int shownLocations = 0;
-                    foreach (var refSym in referencedSymbols.Take(parameters.GetMaxReferences()))
+                    foreach (var refSym in referencedSymbols)
                     {
-                        foreach (var loc in refSym.Locations.Take(2))
+                        if (shownLocations >= parameters.GetMaxReferences())
+                            break;
+
+                        foreach (var loc in refSym.Locations)
                         {
+                            if (shownLocations >= parameters.GetMaxReferences())
+                                break;
+
                             var refFilePath = loc.Document.FilePath;
                             var refFileName = System.IO.Path.GetFileName(refFilePath);
                             var refLineSpan = loc.Location.GetLineSpan();
                             var refLine = refLineSpan.StartLinePosition.Line + 1;
 
+                            // Extract line text for context
+                            var lineText = await ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
+
                             sb.AppendLine($"- `{refFileName}:{refLine}`");
+                            if (!string.IsNullOrEmpty(lineText))
+                            {
+                                sb.AppendLine($"  - {lineText.Trim()}");
+                            }
 
                             shownLocations++;
-                            if (shownLocations >= parameters.GetMaxReferences())
-                                break;
                         }
-                        if (shownLocations >= parameters.GetMaxReferences())
-                            break;
+                    }
+
+                    if (shownLocations < referencedSymbols.Sum(r => r.Locations.Count()))
+                    {
+                        sb.AppendLine($"- ... ({referencedSymbols.Sum(r => r.Locations.Count()) - shownLocations} more references)");
                     }
 
                     sb.AppendLine();
@@ -310,5 +331,27 @@ public class GetSymbolCompleteTool
         }
 
         return sb.ToString();
+    }
+
+    private static async Task<string?> ExtractLineTextAsync(
+        Document document,
+        int lineNumber,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sourceText = await document.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            if (lineNumber < 1 || lineNumber > lines.Count)
+                return null;
+
+            var lineIndex = lineNumber - 1;
+            return lines[lineIndex].ToString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

@@ -38,6 +38,13 @@ public class BatchGetSymbolsTool
                 throw new ArgumentNullException(nameof(parameters));
             }
 
+            // Check workspace state
+            var workspaceError = WorkspaceErrorHelper.CheckWorkspaceLoaded(workspaceManager, "Batch Get Symbols");
+            if (workspaceError != null)
+            {
+                return workspaceError;
+            }
+
             logger.LogInformation("Batch getting {Count} symbols", parameters.Symbols.Count);
 
             // Use a semaphore to limit concurrency
@@ -61,9 +68,27 @@ public class BatchGetSymbolsTool
                             );
                         }
 
+                        // Check for fuzzy match warning
+                        string? fuzzyMatchWarning = null;
+                        if (!string.IsNullOrEmpty(symbolParams.FilePath))
+                        {
+                            var actualFilePath = symbol.GetFilePath();
+                            var requestedFileName = System.IO.Path.GetFileName(symbolParams.FilePath);
+                            var actualFileName = System.IO.Path.GetFileName(actualFilePath);
+
+                            // Warn if file names don't match (indicating fuzzy matching occurred)
+                            if (!string.Equals(requestedFileName, actualFileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                fuzzyMatchWarning = $"⚠️ Fuzzy match: Requested '{requestedFileName}' but found '{actualFileName}' in '{actualFilePath}'";
+                                logger.LogWarning("Fuzzy match detected: Requested '{Requested}' but found '{Actual}' in '{Path}'",
+                                    requestedFileName, actualFileName, actualFilePath);
+                            }
+                        }
+
                         // Build symbol info directly
                         var info = await BuildSymbolInfoAsync(
                             symbol,
+                            fuzzyMatchWarning,
                             parameters.IncludeBody ? parameters.GetBodyMaxLines() : null,
                             cancellationToken);
 
@@ -178,6 +203,7 @@ public class BatchGetSymbolsTool
 
     private static async Task<string> BuildSymbolInfoAsync(
         ISymbol symbol,
+        string? fuzzyMatchWarning,
         int? bodyMaxLines,
         CancellationToken cancellationToken)
     {
@@ -186,6 +212,13 @@ public class BatchGetSymbolsTool
         var (startLine, endLine) = symbol.GetLineRange();
         var filePath = symbol.GetFilePath();
         var kind = symbol.GetDisplayKind();
+
+        // Add fuzzy match warning if present
+        if (!string.IsNullOrEmpty(fuzzyMatchWarning))
+        {
+            sb.AppendLine(fuzzyMatchWarning);
+            sb.AppendLine();
+        }
 
         sb.AppendLine($"**Type**: {char.ToUpper(kind[0]) + kind.Substring(1)}");
 

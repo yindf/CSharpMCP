@@ -402,7 +402,8 @@ public static class SymbolExtensions
         var callers = (await SymbolFinder.FindCallersAsync(method, solution, cancellationToken)).ToArray();
         var callees = (await method.GetCalleesAsync(solution, cancellationToken)).ToArray();
 
-        sb.AppendLine($"- Callers: {callers.Length}");
+        var callerCount = Math.Min(callers.Length, maxCaller);
+        sb.AppendLine($"- Callers: {callerCount} shown (of {callers.Length} total, maxCaller={maxCaller})");
         sb.AppendLine();
 
         // Callers
@@ -417,12 +418,13 @@ public static class SymbolExtensions
 
         if (callers.Length > maxCaller)
         {
-            sb.AppendLine($"- ... {callers.Length - maxCaller} more callers");
+            sb.AppendLine($"- ... {callers.Length - maxCaller} more callers (increase maxCaller to see more)");
         }
 
         sb.AppendLine();
 
-        sb.AppendLine($"- Callees: {callers.Length}");
+        var calleeCount = Math.Min(callees.Length, maxCallee);
+        sb.AppendLine($"- Callees: {calleeCount} shown (of {callees.Length} total, maxCallee={maxCallee})");
         sb.AppendLine();
 
         // Callees
@@ -434,7 +436,7 @@ public static class SymbolExtensions
 
         if (callees.Length > maxCallee)
         {
-            sb.AppendLine($"- ... {callees.Length - maxCallee} more callees");
+            sb.AppendLine($"- ... {callees.Length - maxCallee} more callees (increase maxCallee to see more)");
         }
 
         sb.AppendLine();

@@ -67,6 +67,11 @@ public interface IWorkspaceManager
     /// </summary>
     IEnumerable<Project> GetProjects();
 
+    /// <summary>
+    /// 获取工作区是否已加载
+    /// </summary>
+    bool IsWorkspaceLoaded { get; }
+
     Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
     Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
 }

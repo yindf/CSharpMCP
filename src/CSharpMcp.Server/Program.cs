@@ -41,35 +41,44 @@ public class Program
 
         var host = builder.Build();
 
-        // Auto-load workspace if CSHARPMCP_WORKSPACE environment variable is set
+        // Auto-load workspace on startup
+        var logger = host.Services.GetRequiredService<ILogger<Program>>();
+        var workspaceManager = host.Services.GetRequiredService<IWorkspaceManager>();
+
+        // First, try CSHARPMCP_WORKSPACE environment variable
         var workspacePath = Environment.GetEnvironmentVariable("CSHARPMCP_WORKSPACE");
-        if (!string.IsNullOrEmpty(workspacePath))
+        bool usingEnvVar = !string.IsNullOrEmpty(workspacePath);
+
+        // If no environment variable, use current directory
+        if (string.IsNullOrEmpty(workspacePath))
         {
-            var logger = host.Services.GetRequiredService<ILogger<Program>>();
-            var workspaceManager = host.Services.GetRequiredService<IWorkspaceManager>();
+            workspacePath = System.IO.Directory.GetCurrentDirectory();
+            logger.LogInformation("No CSHARPMCP_WORKSPACE environment variable set, using current directory");
+        }
 
-            logger.LogInformation("Auto-loading workspace from environment variable: {Path}", workspacePath);
+        logger.LogInformation("Auto-loading workspace from: {Path}", workspacePath);
 
-            try
+        try
+        {
+            // Load in background without blocking server startup
+            _ = Task.Run(async () =>
             {
-                // Load in background without blocking server startup
-                _ = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        await workspaceManager.LoadAsync(workspacePath);
-                        logger.LogInformation("Workspace auto-loaded successfully");
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Failed to auto-load workspace from environment variable");
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to start workspace auto-load");
-            }
+                    var info = await workspaceManager.LoadAsync(workspacePath);
+                    logger.LogInformation("Workspace auto-loaded successfully: {Path} ({ProjectCount} projects, {DocumentCount} documents)",
+                        info.Path, info.ProjectCount, info.DocumentCount);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to auto-load workspace from {Path}", workspacePath);
+                    logger.LogInformation("To manually load a workspace, call LoadWorkspace with the path to your .sln or .csproj file");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to start workspace auto-load");
         }
 
         await host.RunAsync();
