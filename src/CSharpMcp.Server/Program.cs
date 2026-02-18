@@ -36,6 +36,39 @@ public class Program
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(Program).Assembly, serializerOptions: McpJsonOptions.Options);
 
-        await builder.Build().RunAsync();
+        var host = builder.Build();
+
+        // Auto-load workspace if CSHARPMCP_WORKSPACE environment variable is set
+        var workspacePath = Environment.GetEnvironmentVariable("CSHARPMCP_WORKSPACE");
+        if (!string.IsNullOrEmpty(workspacePath))
+        {
+            var logger = host.Services.GetRequiredService<ILogger<Program>>();
+            var workspaceManager = host.Services.GetRequiredService<IWorkspaceManager>();
+
+            logger.LogInformation("Auto-loading workspace from environment variable: {Path}", workspacePath);
+
+            try
+            {
+                // Load in background without blocking server startup
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await workspaceManager.LoadAsync(workspacePath);
+                        logger.LogInformation("Workspace auto-loaded successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to auto-load workspace from environment variable");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to start workspace auto-load");
+            }
+        }
+
+        await host.RunAsync();
     }
 }

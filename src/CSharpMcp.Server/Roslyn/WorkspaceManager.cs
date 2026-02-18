@@ -38,53 +38,87 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         await _loadLock.WaitAsync(cancellationToken);
         try
         {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("Path cannot be null or empty.", nameof(path));
+            }
+
             _logger.LogInformation("Loading workspace from: {Path}", path);
 
-            if (!File.Exists(path))
+            // First, check if it's a directory (search for .sln, .slnx, or .csproj)
+            if (Directory.Exists(path))
             {
-                // Check if it's a directory
-                if (Directory.Exists(path))
+                // First, try to find .sln or .slnx file in top level only
+                var slnFile = Directory.GetFiles(path, "*.sln", SearchOption.TopDirectoryOnly).FirstOrDefault()
+                    ?? Directory.GetFiles(path, "*.slnx", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (slnFile != null)
                 {
-                    // Load as folder - find .sln or .csproj
-                    var slnFile = Directory.GetFiles(path, "*.sln").FirstOrDefault();
-                    if (slnFile != null)
-                    {
-                        path = slnFile;
-                    }
-                    else
-                    {
-                        var csprojFile = Directory.GetFiles(path, "*.csproj", SearchOption.AllDirectories).FirstOrDefault();
-                        if (csprojFile != null)
-                        {
-                            path = csprojFile;
-                        }
-                        else
-                        {
-                            throw new FileNotFoundException($"No solution or project file found in: {path}");
-                        }
-                    }
+                    path = slnFile;
+                    _logger.LogInformation("Found solution file: {Path}", path);
                 }
                 else
                 {
-                    throw new FileNotFoundException($"File not found: {path}");
+                    // If no .sln/.slnx, look for .csproj in top level only (not recursive)
+                    var csprojFile = Directory.GetFiles(path, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                    if (csprojFile != null)
+                    {
+                        path = csprojFile;
+                        _logger.LogInformation("Found project file: {Path}", path);
+                    }
+                    else
+                    {
+                        throw new FileNotFoundException($"No .sln, .slnx, or .csproj file found in directory: {path}");
+                    }
                 }
+            }
+            // Not a directory, check if it's an existing file
+            else if (File.Exists(path))
+            {
+                var fileExtension = Path.GetExtension(path).ToLowerInvariant();
+                if (fileExtension != ".sln" && fileExtension != ".slnx" && fileExtension != ".csproj")
+                {
+                    throw new NotSupportedException($"Unsupported file type: {fileExtension}. Expected .sln, .slnx, or .csproj file.");
+                }
+            }
+            // Neither a directory nor an existing file
+            else
+            {
+                throw new FileNotFoundException($"Path not found: {path}");
             }
 
             var extension = Path.GetExtension(path).ToLowerInvariant();
             WorkspaceKind kind;
 
-            if (extension == ".sln")
+            // Normalize the path to use full path
+            var normalizedPath = Path.GetFullPath(path);
+            _logger.LogInformation("Opening {Extension} file: {Path}", extension, normalizedPath);
+
+            if (extension == ".sln" || extension == ".slnx")
             {
-                _logger.LogInformation("Opening solution: {Path}", path);
-                _currentSolution = await _workspace.OpenSolutionAsync(path, cancellationToken: cancellationToken);
-                kind = WorkspaceKind.Solution;
+                try
+                {
+                    _currentSolution = await _workspace.OpenSolutionAsync(normalizedPath, cancellationToken: cancellationToken);
+                    kind = WorkspaceKind.Solution;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to open solution: {Path}", normalizedPath);
+                    throw new InvalidOperationException($"Failed to open solution file: {normalizedPath}. Error: {ex.Message}", ex);
+                }
             }
             else if (extension == ".csproj")
             {
-                _logger.LogInformation("Opening project: {Path}", path);
-                var project = await _workspace.OpenProjectAsync(path, cancellationToken: cancellationToken);
-                _currentSolution = project.Solution;
-                kind = WorkspaceKind.Project;
+                try
+                {
+                    var project = await _workspace.OpenProjectAsync(normalizedPath, cancellationToken: cancellationToken);
+                    _currentSolution = project.Solution;
+                    kind = WorkspaceKind.Project;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to open project: {Path}", normalizedPath);
+                    throw new InvalidOperationException($"Failed to open project file: {normalizedPath}. Error: {ex.Message}", ex);
+                }
             }
             else
             {
@@ -126,11 +160,45 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     {
         if (_currentSolution == null)
         {
-            _logger.LogInformation("Workspace not loaded, attempting auto-load from current directory");
+            _logger.LogInformation("Workspace not loaded, attempting auto-load");
             try
             {
-                // Auto-load workspace from current directory
-                await LoadAsync(Directory.GetCurrentDirectory(), cancellationToken);
+                // Try to find a solution near the target file
+                string searchPath = Directory.GetCurrentDirectory();
+                bool solutionFound = false;
+
+                if (!string.IsNullOrEmpty(filePath))
+                {
+                    var fileDir = Path.GetDirectoryName(filePath);
+                    if (!string.IsNullOrEmpty(fileDir) && Directory.Exists(fileDir))
+                    {
+                        // Search up the directory tree for a .sln file
+                        var currentDir = new DirectoryInfo(fileDir);
+                        while (currentDir != null && !solutionFound)
+                        {
+                            _logger.LogInformation("Searching for solution in: {Path}", currentDir.FullName);
+
+                            // Check for .sln file in current directory
+                            var slnFile = currentDir.GetFiles("*.sln", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                            if (slnFile != null)
+                            {
+                                searchPath = slnFile.FullName;
+                                solutionFound = true;
+                                _logger.LogInformation("Found solution file: {Path}", searchPath);
+                                break;
+                            }
+
+                            // Move up to parent directory (stop at drive root or a limit)
+                            if (currentDir.Parent == null || currentDir.FullName.Length < 10)
+                            {
+                                break;
+                            }
+                            currentDir = currentDir.Parent;
+                        }
+                    }
+                }
+
+                await LoadAsync(searchPath, cancellationToken);
             }
             catch (Exception ex)
             {

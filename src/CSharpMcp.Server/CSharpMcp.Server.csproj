@@ -11,17 +11,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>csharp-mcp</ToolCommandName>
 
-    <!-- Self-contained publishing settings -->
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
-    <PublishReadyToRun>true</PublishReadyToRun>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-
-    <!-- Single-file bundle options -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Framework-dependent publish (requires .NET runtime installed) -->
   </PropertyGroup>
 
   <ItemGroup>

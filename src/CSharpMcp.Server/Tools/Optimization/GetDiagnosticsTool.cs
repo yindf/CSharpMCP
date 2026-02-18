@@ -18,7 +18,7 @@ public class GetDiagnosticsTool
     /// Get compiler errors and warnings for a file or workspace
     /// </summary>
     [McpServerTool]
-    public static async Task<GetDiagnosticsResponse> GetDiagnostics(
+    public static async Task<string> GetDiagnostics(
         GetDiagnosticsParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -88,7 +88,7 @@ public class GetDiagnosticsTool
             logger.LogDebug("Retrieved {Count} diagnostics: {Errors} errors, {Warnings} warnings",
                 diagnostics.Count, totalErrors, totalWarnings);
 
-            return new GetDiagnosticsResponse(summary, diagnostics);
+            return new GetDiagnosticsResponse(summary, diagnostics).ToMarkdown();
         }
         catch (Exception ex)
         {

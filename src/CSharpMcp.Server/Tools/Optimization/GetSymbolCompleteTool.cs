@@ -18,7 +18,7 @@ public class GetSymbolCompleteTool
     /// Get complete symbol information from multiple sources in one call
     /// </summary>
     [McpServerTool]
-    public static async Task<GetSymbolCompleteResponse> GetSymbolComplete(
+    public static async Task<string> GetSymbolComplete(
         GetSymbolCompleteParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -49,7 +49,7 @@ public class GetSymbolCompleteTool
             var info = await symbolAnalyzer.ToSymbolInfoAsync(
                 symbol,
                 parameters.DetailLevel,
-                parameters.Sections.HasFlag(SymbolCompleteSections.SourceCode) ? parameters.BodyMaxLines : null,
+                parameters.Sections.HasFlag(SymbolCompleteSections.SourceCode) ? parameters.GetBodyMaxLines() : null,
                 cancellationToken);
 
             // Get documentation
@@ -59,11 +59,32 @@ public class GetSymbolCompleteTool
                 documentation = info.Documentation;
             }
 
-            // Get source code
+            // Get source code (always include for methods, otherwise based on sections)
             string? sourceCode = null;
-            if (parameters.Sections.HasFlag(SymbolCompleteSections.SourceCode))
+            bool isSourceTruncated = false;
+            int totalSourceLines = 0;
+            bool isMethod = symbol.Kind == SymbolKind.Method;
+            if (parameters.Sections.HasFlag(SymbolCompleteSections.SourceCode) || isMethod)
             {
-                sourceCode = info.SourceCode;
+                // For methods, always include source code
+                sourceCode = await symbolAnalyzer.ExtractSourceCodeAsync(
+                    symbol,
+                    isMethod, // include body for methods
+                    parameters.GetBodyMaxLines(),
+                    cancellationToken);
+
+                // Calculate truncation info
+                if (isMethod && !string.IsNullOrEmpty(sourceCode))
+                {
+                    var locations = symbol.Locations;
+                    if (locations.Length > 0)
+                    {
+                        var lineSpan = locations[0].GetLineSpan();
+                        totalSourceLines = lineSpan.EndLinePosition.Line - lineSpan.StartLinePosition.Line + 1;
+                        var linesShown = sourceCode.Split('\n').Length;
+                        isSourceTruncated = parameters.GetBodyMaxLines() > 0 && parameters.GetBodyMaxLines() < totalSourceLines;
+                    }
+                }
             }
 
             // Get references
@@ -78,7 +99,7 @@ public class GetSymbolCompleteTool
                         solution,
                         cancellationToken);
 
-                    foreach (var refSym in referencedSymbols.Take(parameters.MaxReferences))
+                    foreach (var refSym in referencedSymbols.Take(parameters.GetMaxReferences()))
                     {
                         foreach (var loc in refSym.Locations)
                         {
@@ -90,10 +111,14 @@ public class GetSymbolCompleteTool
                                 loc.Location.GetLineSpan().EndLinePosition.Character + 1
                             );
 
+                            // Extract line text
+                            var lineText = await ExtractLineTextAsync(loc.Document, location.StartLine, cancellationToken);
+
                             references.Add(new Models.SymbolReference(
                                 location,
                                 refSym.Definition?.Name ?? "Unknown",
-                                null
+                                null,
+                                lineText
                             ));
                         }
                     }
@@ -131,8 +156,8 @@ public class GetSymbolCompleteTool
                                 TypeKind.Delegate => Models.SymbolKind.Delegate,
                                 _ => Models.SymbolKind.Unknown
                             },
-                            BaseTypes: tree.BaseTypes.Select(b => b.Name).ToList(),
-                            Interfaces: tree.Interfaces.Select(i => i.Name).ToList(),
+                            BaseTypes: tree.BaseTypes,
+                            Interfaces: tree.Interfaces,
                             DerivedTypes: Array.Empty<Models.SymbolInfo>(),
                             Depth: 0
                         );
@@ -157,7 +182,7 @@ public class GetSymbolCompleteTool
                             method,
                             solution,
                             CallGraphDirection.Both,
-                            parameters.CallGraphMaxDepth,
+                            parameters.GetCallGraphMaxDepth(),
                             cancellationToken);
 
                         var callers = graph.Callers.Select(c => new CallRelationshipItem(
@@ -202,12 +227,14 @@ public class GetSymbolCompleteTool
                 SourceCode: sourceCode,
                 References: references,
                 Inheritance: inheritance,
-                CallGraph: callGraph
+                CallGraph: callGraph,
+                IsSourceTruncated: isSourceTruncated,
+                TotalSourceLines: totalSourceLines
             );
 
             logger.LogDebug("Retrieved complete symbol info for: {SymbolName}", symbol.Name);
 
-            return new GetSymbolCompleteResponse(symbol.Name, completeData, false);
+            return new GetSymbolCompleteResponse(symbol.Name, completeData, false).ToMarkdown();
         }
         catch (Exception ex)
         {
@@ -253,5 +280,27 @@ public class GetSymbolCompleteTool
         }
 
         return (symbol, document);
+    }
+
+    private static async Task<string?> ExtractLineTextAsync(
+        Document document,
+        int lineNumber,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sourceText = await document.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            if (lineNumber < 1 || lineNumber > lines.Count)
+                return null;
+
+            var lineIndex = lineNumber - 1;
+            return lines[lineIndex].ToString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

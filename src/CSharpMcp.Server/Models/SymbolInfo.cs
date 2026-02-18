@@ -33,7 +33,8 @@ public record SymbolSignature(
 public record SymbolReference(
     SymbolLocation Location,
     string ContainingSymbol,
-    string? ContextCode
+    string? ContextCode,
+    string? LineText
 );
 
 /// <summary>
@@ -51,10 +52,15 @@ public record SymbolInfo
     public SymbolSignature? Signature { get; init; }
     public string? Documentation { get; init; }
     public string? SourceCode { get; init; }
+    public string? LineText { get; init; }
 
     // 关系信息
     public IReadOnlyList<SymbolReference> References { get; init; } = [];
     public IReadOnlyList<SymbolInfo> RelatedSymbols { get; init; } = [];
+
+    // 类型继承信息
+    public string? BaseType { get; init; }
+    public IReadOnlyList<string> Interfaces { get; init; } = [];
 
     // 元数据
     public bool IsStatic { get; init; }
@@ -62,5 +68,5 @@ public record SymbolInfo
     public bool IsOverride { get; init; }
     public bool IsAbstract { get; init; }
     public bool IsAsync { get; init; }
-    public Accessibility Accessibility { get; init; }
+    public Accessibility Accessibility { get; init; } = Accessibility.NotApplicable;
 }

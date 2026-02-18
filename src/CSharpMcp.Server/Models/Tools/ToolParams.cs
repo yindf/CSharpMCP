@@ -361,3 +361,14 @@ public enum DiagnosticSeverity
     /// </summary>
     Hidden
 }
+
+/// <summary>
+/// load_workspace 工具参数 - 加载 C# 解决方案或项目
+/// </summary>
+public record LoadWorkspaceParams
+{
+    /// <summary>
+    /// 工作区路径 (支持 .sln 文件、.csproj 文件或包含它们的目录)
+    /// </summary>
+    public required string Path { get; init; }
+}

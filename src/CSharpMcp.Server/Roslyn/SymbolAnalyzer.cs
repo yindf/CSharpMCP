@@ -251,34 +251,51 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
     /// <summary>
     /// 获取符号的定义位置
     /// </summary>
-    public Task<SymbolLocation?> GetSymbolLocationAsync(
+    public async Task<SymbolLocation?> GetSymbolLocationAsync(
         ISymbol symbol,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            var locations = symbol.Locations;
+            // Try to get the syntax node for accurate span information
+            var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxRef != null)
+            {
+                var syntaxNode = await syntaxRef.GetSyntaxAsync(cancellationToken);
+                if (syntaxNode != null)
+                {
+                    var lineSpan = syntaxNode.SyntaxTree.GetLineSpan(syntaxNode.Span);
+                    return new SymbolLocation(
+                        syntaxNode.SyntaxTree?.FilePath ?? "",
+                        lineSpan.StartLinePosition.Line + 1,
+                        lineSpan.EndLinePosition.Line + 1,
+                        lineSpan.StartLinePosition.Character + 1,
+                        lineSpan.EndLinePosition.Character + 1
+                    );
+                }
+            }
 
-            // Prefer source locations
+            // Fallback to location from symbol
+            var locations = symbol.Locations;
             var sourceLocation = locations.FirstOrDefault(l => l.IsInSource);
             if (sourceLocation != null)
             {
                 var lineSpan = sourceLocation.GetLineSpan();
-                return Task.FromResult<SymbolLocation?>(new SymbolLocation(
+                return new SymbolLocation(
                     sourceLocation.SourceTree?.FilePath ?? "",
                     lineSpan.StartLinePosition.Line + 1,
                     lineSpan.EndLinePosition.Line + 1,
                     lineSpan.StartLinePosition.Character + 1,
                     lineSpan.EndLinePosition.Character + 1
-                ));
+                );
             }
 
-            return Task.FromResult<SymbolLocation?>(null);
+            return null;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get location for symbol: {SymbolName}", symbol.Name);
-            return Task.FromResult<SymbolLocation?>(null);
+            return null;
         }
     }
 
@@ -358,19 +375,34 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
                 return Task.FromResult<string?>(null);
             }
 
-            // Simple XML to text conversion
-            var text = System.Web.HttpUtility.HtmlDecode(xmlComment)
-                .Replace("<summary>", "")
-                .Replace("</summary>", "")
-                .Replace("<returns>", "Returns: ")
-                .Replace("</returns>", "")
-                .Replace("<param name=", "Parameter: ")
-                .Replace("/>", "")
-                .Replace("<", "")
-                .Replace(">", "")
-                .Trim();
+            // Extract only the summary content
+            var summaryStart = xmlComment.IndexOf("<summary>");
+            if (summaryStart < 0)
+            {
+                return Task.FromResult<string?>(null);
+            }
 
-            return Task.FromResult<string?>(string.IsNullOrEmpty(text) ? null : text);
+            summaryStart += "<summary>".Length;
+            var summaryEnd = xmlComment.IndexOf("</summary>", summaryStart);
+            if (summaryEnd < 0)
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            var summary = xmlComment.Substring(summaryStart, summaryEnd - summaryStart);
+
+            // Clean up XML tags within the summary (like <see>, <paramref>, etc.)
+            summary = System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]+>", "");
+
+            // Decode HTML entities
+            summary = System.Web.HttpUtility.HtmlDecode(summary);
+
+            // Clean up whitespace
+            summary = summary.Trim();
+            // Collapse multiple spaces and newlines to single space
+            summary = System.Text.RegularExpressions.Regex.Replace(summary, @"\s+", " ");
+
+            return Task.FromResult<string?>(string.IsNullOrEmpty(summary) ? null : summary);
         }
         catch (Exception ex)
         {
@@ -402,22 +434,71 @@ internal sealed partial class SymbolAnalyzer : ISymbolAnalyzer
                 return null;
             }
 
-            var fullSpan = syntaxNode.FullSpan;
             var lines = syntaxNode.SyntaxTree.GetText().Lines;
+            TextSpan extractSpan;
 
-            var startLine = lines.GetLineFromPosition(fullSpan.Start).LineNumber;
-            var endLine = lines.GetLineFromPosition(fullSpan.End).LineNumber;
-
-            if (!includeBody)
+            // For methods, properties with bodies, get the content inside the braces
+            if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
             {
-                // For methods, get just the signature
-                if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BaseMethodDeclarationSyntax methodSyntax)
+                if (!includeBody)
                 {
+                    // Just the signature (up to closing parenthesis of parameter list)
                     var signatureEnd = methodSyntax.ParameterList.Span.End;
-                    var signatureLine = lines.GetLineFromPosition(signatureEnd);
-                    endLine = signatureLine.LineNumber;
+                    extractSpan = TextSpan.FromBounds(methodSyntax.Span.Start, signatureEnd);
+                }
+                else
+                {
+                    // Get content inside the method body braces
+                    var body = methodSyntax.Body;
+                    if (body != null)
+                    {
+                        // Extract from after opening brace to before closing brace
+                        var openBrace = body.ChildTokens().FirstOrDefault(t => t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OpenBraceToken));
+                        var closeBrace = body.ChildTokens().LastOrDefault(t => t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CloseBraceToken));
+
+                        if (openBrace != default && closeBrace != default)
+                        {
+                            extractSpan = TextSpan.FromBounds(openBrace.Span.End, closeBrace.Span.Start);
+                        }
+                        else
+                        {
+                            // Fallback to body span
+                            extractSpan = body.Span;
+                        }
+                    }
+                    else
+                    {
+                        extractSpan = syntaxNode.Span;
+                    }
                 }
             }
+            else if (syntaxNode is Microsoft.CodeAnalysis.CSharp.Syntax.BasePropertyDeclarationSyntax propertySyntax)
+            {
+                if (!includeBody)
+                {
+                    extractSpan = propertySyntax.Span;
+                }
+                else
+                {
+                    var accessorList = propertySyntax.AccessorList;
+                    if (accessorList != null)
+                    {
+                        extractSpan = accessorList.Span;
+                    }
+                    else
+                    {
+                        extractSpan = syntaxNode.Span;
+                    }
+                }
+            }
+            else
+            {
+                // For other symbols, use the full span
+                extractSpan = syntaxNode.Span;
+            }
+
+            var startLine = lines.GetLineFromPosition(extractSpan.Start).LineNumber;
+            var endLine = lines.GetLineFromPosition(extractSpan.End).LineNumber;
 
             // Apply max lines limit
             if (maxLines.HasValue && (endLine - startLine + 1) > maxLines.Value)

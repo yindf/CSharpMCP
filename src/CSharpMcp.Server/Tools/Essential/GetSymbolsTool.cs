@@ -22,7 +22,7 @@ public class GetSymbolsTool
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>List of symbols found in the document</returns>
     [McpServerTool]
-    public static async Task<GetSymbolsResponse> GetSymbols(
+    public static async Task<string> GetSymbols(
         GetSymbolsParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -37,19 +37,15 @@ public class GetSymbolsTool
             }
 
             logger.LogDebug("Getting symbols for: {FilePath}", parameters.FilePath);
-            Console.Error.WriteLine($"[DEBUG] GetSymbols called with: {parameters.FilePath}");
 
             var document = await workspaceManager.GetDocumentAsync(parameters.FilePath, cancellationToken);
             if (document == null)
             {
                 logger.LogWarning("Document not found: {FilePath}", parameters.FilePath);
-                Console.Error.WriteLine($"[DEBUG] Document not found: {parameters.FilePath}");
                 throw new FileNotFoundException($"Document not found: {parameters.FilePath}");
             }
 
-            Console.Error.WriteLine($"[DEBUG] Document found: {document.Name}");
             var symbols = await symbolAnalyzer.GetDocumentSymbolsAsync(document, cancellationToken);
-            Console.Error.WriteLine($"[DEBUG] Got {symbols.Count()} symbols");
 
             // Apply filters
             if (parameters.FilterKinds != null && parameters.FilterKinds.Count > 0)
@@ -76,7 +72,7 @@ public class GetSymbolsTool
             return new GetSymbolsResponse(
                 parameters.FilePath,
                 symbolInfos,
-                symbols.Count);
+                symbols.Count).ToMarkdown();
         }
         catch (Exception ex)
         {

@@ -18,7 +18,7 @@ public class BatchGetSymbolsTool
     /// Batch get symbol information for multiple symbols in parallel
     /// </summary>
     [McpServerTool]
-    public static async Task<BatchGetSymbolsResponse> BatchGetSymbols(
+    public static async Task<string> BatchGetSymbols(
         BatchGetSymbolsParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -35,7 +35,7 @@ public class BatchGetSymbolsTool
             logger.LogDebug("Batch getting {Count} symbols", parameters.Symbols.Count);
 
             // Use a semaphore to limit concurrency
-            var semaphore = new System.Threading.SemaphoreSlim(parameters.MaxConcurrency);
+            var semaphore = new System.Threading.SemaphoreSlim(parameters.GetMaxConcurrency());
             var tasks = new List<Task<BatchSymbolResult>>();
 
             foreach (var symbolParams in parameters.Symbols)
@@ -58,7 +58,7 @@ public class BatchGetSymbolsTool
                         var info = await symbolAnalyzer.ToSymbolInfoAsync(
                             symbol,
                             parameters.DetailLevel,
-                            parameters.IncludeBody ? parameters.BodyMaxLines : null,
+                            parameters.IncludeBody ? parameters.GetBodyMaxLines() : null,
                             cancellationToken);
 
                         return new BatchSymbolResult(
@@ -103,7 +103,7 @@ public class BatchGetSymbolsTool
                 successCount,
                 errorCount,
                 results
-            );
+            ).ToMarkdown();
         }
         catch (Exception ex)
         {

@@ -16,7 +16,7 @@ public class GoToDefinitionTool
     /// Navigate to the definition of a symbol
     /// </summary>
     [McpServerTool]
-    public static async Task<GoToDefinitionResponse> GoToDefinition(
+    public static async Task<string> GoToDefinition(
         GoToDefinitionParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -39,7 +39,7 @@ public class GoToDefinitionTool
                 var result = await TryFindByPositionAsync(parameters, workspaceManager, symbolAnalyzer, logger, cancellationToken);
                 if (result != null)
                 {
-                    return result;
+                    return result.ToMarkdown();
                 }
             }
 
@@ -49,7 +49,7 @@ public class GoToDefinitionTool
                 var result = await TryFindByNameAsync(parameters, workspaceManager, symbolAnalyzer, logger, cancellationToken);
                 if (result != null)
                 {
-                    return result;
+                    return result.ToMarkdown();
                 }
             }
 
@@ -130,16 +130,19 @@ public class GoToDefinitionTool
         var info = await symbolAnalyzer.ToSymbolInfoAsync(
             symbol,
             parameters.DetailLevel,
-            parameters.IncludeBody ? parameters.BodyMaxLines : null,
+            parameters.IncludeBody ? parameters.GetBodyMaxLines() : null,
             cancellationToken);
 
-        var sourceLines = info.SourceCode?.Split('\n').Length ?? 0;
+        // Calculate total lines in the full method span
         var totalLines = info.Location.EndLine - info.Location.StartLine + 1;
-        var isTruncated = parameters.IncludeBody && parameters.BodyMaxLines < totalLines;
+        // Calculate actual lines returned (may be truncated)
+        var sourceLines = info.SourceCode?.Split('\n').Length ?? 0;
+        var isTruncated = parameters.IncludeBody && parameters.GetBodyMaxLines() < totalLines;
 
         logger.LogDebug("Found definition: {SymbolName} at {FilePath}:{LineNumber}",
             symbol.Name, info.Location.FilePath, info.Location.StartLine);
 
-        return new GoToDefinitionResponse(info, isTruncated, sourceLines);
+        // Pass totalLines (full span) not sourceLines (truncated count)
+        return new GoToDefinitionResponse(info, isTruncated, totalLines);
     }
 }

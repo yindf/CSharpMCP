@@ -74,7 +74,6 @@ public static class McpJsonOptions
     {
         TypeInfoResolver = JsonSerializationContext.Default,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true) }
+        WriteIndented = false
     };
 }

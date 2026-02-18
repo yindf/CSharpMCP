@@ -24,7 +24,8 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         int maxDerivedDepth,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogDebug("Getting inheritance tree for: {TypeName}", type.ToDisplayString());
+        _logger.LogDebug("Getting inheritance tree for: {TypeName}, includeDerived={IncludeDerived}, maxDepth={MaxDepth}",
+            type.ToDisplayString(), includeDerived, maxDerivedDepth);
 
         // Get base types
         var baseTypes = GetBaseTypeChain(type);
@@ -39,6 +40,7 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         if (includeDerived)
         {
             var derivedSymbols = await FindDerivedTypesAsync(type, solution, cancellationToken);
+
             var derivedSet = new HashSet<INamedTypeSymbol>();
 
             await CollectDerivedTypesBfsAsync(
@@ -93,49 +95,131 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         Solution solution,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogDebug("Finding derived types for: {TypeName}", type.ToDisplayString());
+        _logger.LogDebug("Finding derived types for: {TypeName} (Kind: {TypeKind})",
+            type.ToDisplayString(), type.TypeKind);
 
-        // Find all references to the type
         var derivedTypes = new List<INamedTypeSymbol>();
+        var derivedSet = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 
-        // Search for all named types in the solution
+        // Build a "key" for the target type that can be compared across compilations
+        var targetName = type.Name;
+        var targetNamespace = type.ContainingNamespace?.ToString();
+        var targetKind = type.TypeKind;
+
+        _logger.LogDebug("Target: Name={Name}, Namespace={Namespace}, Kind={Kind}",
+            targetName, targetNamespace, targetKind);
+        _logger.LogDebug("Solution has {ProjectCount} projects", solution.Projects.Count());
+
+        int documentsScanned = 0;
+        int classesFound = 0;
+        int projectsScanned = 0;
+
+        // For interfaces, find classes that implement it
+        // For classes, find derived classes
         foreach (var project in solution.Projects)
         {
+            _logger.LogDebug("Scanning project: {ProjectName} ({DocCount} documents)",
+                project.Name, project.DocumentIds.Count);
+            projectsScanned++;
+
             foreach (var document in project.Documents)
             {
+                documentsScanned++;
                 var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
                 if (semanticModel == null) continue;
 
                 var root = await document.GetSyntaxRootAsync(cancellationToken);
                 if (root == null) continue;
 
-                // Find all type declarations
-                var typeDeclarations = root.DescendantNodes()
-                    .Where(n => n is Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax
-                              or Microsoft.CodeAnalysis.CSharp.Syntax.StructDeclarationSyntax
-                              or Microsoft.CodeAnalysis.CSharp.Syntax.InterfaceDeclarationSyntax
-                              or Microsoft.CodeAnalysis.CSharp.Syntax.RecordDeclarationSyntax);
+                // Find all class declarations
+                var classDeclarations = root.DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>();
 
-                foreach (var typeDecl in typeDeclarations)
+                foreach (var classDecl in classDeclarations)
                 {
-                    var declaredSymbol = semanticModel.GetDeclaredSymbol(typeDecl, cancellationToken);
-                    if (declaredSymbol is not INamedTypeSymbol namedType ||
-                        namedType.Equals(type))
+                    classesFound++;
+                    var classSymbol = semanticModel.GetDeclaredSymbol(classDecl, cancellationToken);
+                    if (classSymbol == null) continue;
+
+                    // Skip if it's the same type (by name and namespace)
+                    if (classSymbol.Name == targetName &&
+                        classSymbol.ContainingNamespace?.ToString() == targetNamespace)
                     {
+                        _logger.LogDebug("Skipping same type: {ClassName}", classSymbol.Name);
                         continue;
                     }
 
-                    // Check if this type derives from our target type
-                    if (InheritsFrom(namedType, type))
+                    bool isDerived = false;
+
+                    // Check class inheritance (for class targets)
+                    if (targetKind == TypeKind.Class)
                     {
-                        derivedTypes.Add(namedType);
+                        var current = (classSymbol as INamedTypeSymbol)?.BaseType;
+                        while (current != null)
+                        {
+                            if (current.Name == targetName &&
+                                current.ContainingNamespace?.ToString() == targetNamespace)
+                            {
+                                isDerived = true;
+                                break;
+                            }
+                            current = current.BaseType;
+                        }
+                    }
+
+                    // Check interface implementations via base list syntax OR AllInterfaces
+                    if (!isDerived && targetKind == TypeKind.Interface)
+                    {
+                        // Method 1: Check base list syntax (more reliable for explicit implementations)
+                        if (classDecl.BaseList != null)
+                        {
+                            foreach (var baseTypeSyntax in classDecl.BaseList.Types)
+                            {
+                                var baseSymbolInfo = semanticModel.GetSymbolInfo(baseTypeSyntax.Type, cancellationToken);
+                                if (baseSymbolInfo.Symbol is INamedTypeSymbol namedType)
+                                {
+                                    // Match by name only for interfaces - this is most reliable
+                                    if (namedType.Name == targetName)
+                                    {
+                                        isDerived = true;
+                                        _logger.LogDebug("Found via BaseList: {ClassName} implements {InterfaceName} (from {FilePath})",
+                                            classSymbol.Name, namedType.Name, document.FilePath);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Method 2: Check AllInterfaces (catches inherited implementations)
+                        if (!isDerived && classSymbol is INamedTypeSymbol namedClassSymbol)
+                        {
+                            foreach (var iface in namedClassSymbol.AllInterfaces)
+                            {
+                                if (iface.Name == targetName)
+                                {
+                                    isDerived = true;
+                                    _logger.LogDebug("Found via AllInterfaces: {ClassName} implements {InterfaceName} (from {FilePath})",
+                                        classSymbol.Name, iface.Name, document.FilePath);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (isDerived && classSymbol is INamedTypeSymbol namedClass && !derivedSet.Contains(namedClass))
+                    {
+                        derivedSet.Add(namedClass);
+                        derivedTypes.Add(namedClass);
+                        _logger.LogDebug("Added derived type: {ClassName} (from {Document})",
+                            namedClass.Name, document.Name);
                     }
                 }
             }
         }
 
-        _logger.LogDebug("Found {Count} derived types for {TypeName}",
-            derivedTypes.Count, type.ToDisplayString());
+        _logger.LogDebug(
+            "Scanned {Projects} projects, {Documents} documents, found {Classes} classes, found {Derived} derived types for {TypeName}",
+            projectsScanned, documentsScanned, classesFound, derivedTypes.Count, type.ToDisplayString());
 
         return derivedTypes;
     }
@@ -163,8 +247,12 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         int currentDepth,
         CancellationToken cancellationToken)
     {
-        if (currentDepth >= maxDepth || currentLevel.Count == 0)
+        _logger.LogDebug("CollectDerivedTypesBfsAsync: currentDepth={CurrentDepth}, maxDepth={MaxDepth}, currentLevelCount={Count}",
+            currentDepth, maxDepth, currentLevel.Count);
+
+        if (currentLevel.Count == 0)
         {
+            _logger.LogDebug("CollectDerivedTypesBfsAsync: returning early (no types)");
             return;
         }
 
@@ -174,14 +262,30 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
         {
             if (collected.Contains(type))
             {
+                _logger.LogDebug("CollectDerivedTypesBfsAsync: skipping {TypeName} (already collected)", type.Name);
                 continue;
             }
 
             collected.Add(type);
+            _logger.LogDebug("CollectDerivedTypesBfsAsync: added {TypeName} to collected set (total: {Count})",
+                type.Name, collected.Count);
 
-            // Find types that derive from this type
-            var derived = await FindDerivedTypesAsync(type, solution, cancellationToken);
-            nextLevel.AddRange(derived);
+            // Only find deeper derived types if we haven't reached max depth
+            // maxDepth=0 means only collect direct descendants (depth 0 only)
+            // maxDepth=1 means collect direct descendants and their descendants (depths 0 and 1)
+            if (currentDepth < maxDepth)
+            {
+                // Find types that derive from this type
+                var derived = await FindDerivedTypesAsync(type, solution, cancellationToken);
+                _logger.LogDebug("CollectDerivedTypesBfsAsync: found {Count} derived types for {TypeName}",
+                    derived.Count, type.Name);
+                nextLevel.AddRange(derived);
+            }
+            else
+            {
+                _logger.LogDebug("CollectDerivedTypesBfsAsync: reached maxDepth {MaxDepth}, not finding deeper types for {TypeName}",
+                    maxDepth, type.Name);
+            }
         }
 
         await CollectDerivedTypesBfsAsync(
@@ -191,6 +295,32 @@ public class InheritanceAnalyzer : IInheritanceAnalyzer
             maxDepth,
             currentDepth + 1,
             cancellationToken);
+    }
+
+    private bool InheritsFromOrImplements(INamedTypeSymbol type, INamedTypeSymbol baseType)
+    {
+        var current = type;
+
+        while (current != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, baseType))
+            {
+                return true;
+            }
+
+            // Check if current type implements the base interface
+            foreach (var iface in current.AllInterfaces)
+            {
+                if (SymbolEqualityComparer.Default.Equals(iface, baseType))
+                {
+                    return true;
+                }
+            }
+
+            current = current.BaseType;
+        }
+
+        return false;
     }
 
     private bool InheritsFrom(INamedTypeSymbol type, INamedTypeSymbol baseType)

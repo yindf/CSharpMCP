@@ -17,7 +17,7 @@ public class FindReferencesTool
     /// Find all references to a symbol across the workspace
     /// </summary>
     [McpServerTool]
-    public static async Task<FindReferencesResponse> FindReferences(
+    public static async Task<string> FindReferences(
         FindReferencesParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -70,15 +70,21 @@ public class FindReferencesTool
                     );
 
                     string? contextCode = null;
+                    string? lineText = null;
+
                     if (parameters.IncludeContext)
                     {
-                        contextCode = await ExtractContextCodeAsync(loc.Document, location, parameters.ContextLines, cancellationToken);
+                        contextCode = await ExtractContextCodeAsync(loc.Document, location, parameters.GetContextLines(), cancellationToken);
                     }
+
+                    // Always extract line text
+                    lineText = await ExtractLineTextAsync(loc.Document, location.StartLine, cancellationToken);
 
                     references.Add(new Models.SymbolReference(
                         location,
                         refSym.Definition?.Name ?? "Unknown",
-                        contextCode
+                        contextCode,
+                        lineText
                     ));
 
                     files.Add(location.FilePath);
@@ -100,7 +106,7 @@ public class FindReferencesTool
 
             logger.LogDebug("Found {Count} references for {SymbolName}", references.Count, symbol.Name);
 
-            return new FindReferencesResponse(symbolInfo, references, summary);
+            return new FindReferencesResponse(symbolInfo, references, summary).ToMarkdown();
         }
         catch (Exception ex)
         {
@@ -146,6 +152,28 @@ public class FindReferencesTool
         }
 
         return (symbol, document);
+    }
+
+    private static async Task<string?> ExtractLineTextAsync(
+        Document document,
+        int lineNumber,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sourceText = await document.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            if (lineNumber < 1 || lineNumber > lines.Count)
+                return null;
+
+            var lineIndex = lineNumber - 1;
+            return lines[lineIndex].ToString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static async Task<string?> ExtractContextCodeAsync(

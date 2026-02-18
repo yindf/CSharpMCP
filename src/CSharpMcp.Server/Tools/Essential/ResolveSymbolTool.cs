@@ -17,7 +17,7 @@ public class ResolveSymbolTool
     /// Get comprehensive symbol information including documentation, comments, and context
     /// </summary>
     [McpServerTool]
-    public static async Task<ResolveSymbolResponse> ResolveSymbol(
+    public static async Task<string> ResolveSymbol(
         ResolveSymbolParams parameters,
         IWorkspaceManager workspaceManager,
         ISymbolAnalyzer symbolAnalyzer,
@@ -46,7 +46,7 @@ public class ResolveSymbolTool
             var info = await symbolAnalyzer.ToSymbolInfoAsync(
                 symbol,
                 parameters.DetailLevel,
-                parameters.IncludeBody ? parameters.BodyMaxLines : null,
+                parameters.IncludeBody ? parameters.GetBodyMaxLines() : null,
                 cancellationToken);
 
             // Get definition source
@@ -56,7 +56,7 @@ public class ResolveSymbolTool
                 definition = await symbolAnalyzer.ExtractSourceCodeAsync(
                     symbol,
                     true,
-                    parameters.BodyMaxLines,
+                    parameters.GetBodyMaxLines(),
                     cancellationToken);
             }
 
@@ -83,10 +83,14 @@ public class ResolveSymbolTool
                             loc.Location.GetLineSpan().EndLinePosition.Character + 1
                         );
 
+                        // Extract line text
+                        var lineText = await ExtractLineTextAsync(loc.Document, location.StartLine, cancellationToken);
+
                         references.Add(new Models.SymbolReference(
                             location,
                             refSym.Definition?.Name ?? "Unknown",
-                            null
+                            null,
+                            lineText
                         ));
                     }
                 }
@@ -98,12 +102,34 @@ public class ResolveSymbolTool
 
             logger.LogDebug("Resolved symbol: {SymbolName}", symbol.Name);
 
-            return new ResolveSymbolResponse(info, definition, references);
+            return new ResolveSymbolResponse(info, definition, references).ToMarkdown();
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing ResolveSymbolTool");
             throw;
+        }
+    }
+
+    private static async Task<string?> ExtractLineTextAsync(
+        Document document,
+        int lineNumber,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sourceText = await document.GetTextAsync(cancellationToken);
+            var lines = sourceText.Lines;
+
+            if (lineNumber < 1 || lineNumber > lines.Count)
+                return null;
+
+            var lineIndex = lineNumber - 1;
+            return lines[lineIndex].ToString();
+        }
+        catch
+        {
+            return null;
         }
     }
 
