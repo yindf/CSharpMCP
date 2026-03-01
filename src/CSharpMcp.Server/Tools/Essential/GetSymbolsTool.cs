@@ -36,6 +36,9 @@ public class GetSymbolsTool
                 return workspaceError;
             }
 
+            // 确保工作区是最新的（处理待处理的文件变更）
+            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+
             logger.LogDebug("Getting symbols for: {FilePath}", filePath);
 
             var document = await workspaceManager.GetDocumentAsync(filePath, cancellationToken);

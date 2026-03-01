@@ -12,11 +12,11 @@ namespace CSharpMcp.Server.Roslyn;
 
 /// <summary>
 /// 文件监控服务 - 使用单一 FileSystemWatcher 监控整个解决方案目录
+/// 只收集文件变化，不自动编译。在工具调用时通过 FlushPendingChangesAsync 触发编译。
 /// </summary>
 internal sealed class FileWatcherService : IDisposable
 {
     private readonly FileSystemWatcher _watcher;
-    private readonly System.Threading.Timer _debounceTimer;
     private readonly string _solutionPath;
     private readonly string _solutionDirectory;
     private readonly Func<IReadOnlyDictionary<string, FileChangeType>, CancellationToken, Task> _onFileChanged;
@@ -26,6 +26,11 @@ internal sealed class FileWatcherService : IDisposable
 
     private readonly Dictionary<string, FileChangeType> _pendingFileChanges = new();
     private bool _disposed;
+
+    // 编译状态跟踪
+    private volatile bool _hasPendingChanges;
+    private TaskCompletionSource? _processingTcs;
+    private readonly object _processingTcsLock = new();
 
     // MD5 过滤机制相关字段
     private readonly Dictionary<string, string> _applyingSnapshots = new();  // filePath -> MD5
@@ -43,9 +48,6 @@ internal sealed class FileWatcherService : IDisposable
         _solutionDirectory = solutionDirectory;
         _onFileChanged = onFileChanged;
         _logger = logger;
-
-        // 创建防抖定时器（1秒延迟）
-        _debounceTimer = new System.Threading.Timer(OnDebounce, null, Timeout.Infinite, Timeout.Infinite);
 
         // 创建单一的 FileSystemWatcher 监控整个解决方案目录
         _watcher = new FileSystemWatcher(_solutionDirectory)
@@ -66,7 +68,7 @@ internal sealed class FileWatcherService : IDisposable
         _watcher.EnableRaisingEvents = true;
 
         _logger.LogInformation("FileWatcherService initialized for: {Directory}", _solutionDirectory);
-        _logger.LogInformation("Watching: *.sln, *.csproj, *.cs");
+        _logger.LogInformation("Watching: *.sln, *.csproj, *.cs (auto-compile disabled)");
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
@@ -147,23 +149,60 @@ internal sealed class FileWatcherService : IDisposable
     }
 
     /// <summary>
-    /// 安排文件变化处理（带防抖）
+    /// 安排文件变化处理（只收集，不自动编译）
     /// </summary>
     private void ScheduleChange(FileChangeType changeType, string filePath)
     {
         lock (_pendingChangesLock)
         {
             _pendingFileChanges[filePath] = changeType;
+            _hasPendingChanges = true;
         }
 
-        // 重置防抖定时器（1秒后执行）
-        _debounceTimer.Change(1000, Timeout.Infinite);
+        // 不再自动触发编译，等待工具调用时通过 FlushPendingChangesAsync 触发
+        _logger.LogDebug("File change recorded: {Type} - {Path} (waiting for manual flush)", changeType, filePath);
     }
 
     /// <summary>
-    /// 防抖定时器回调
+    /// 是否有待处理的文件变更
     /// </summary>
-    private void OnDebounce(object? state)
+    public bool HasPendingChanges => _hasPendingChanges;
+
+    /// <summary>
+    /// 立即处理待处理的文件变更，并等待编译完成
+    /// 用于符号查询前确保工作区是最新的
+    /// </summary>
+    public async Task FlushPendingChangesAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_hasPendingChanges)
+            return;
+
+        TaskCompletionSource tcs;
+        lock (_processingTcsLock)
+        {
+            // 如果已有等待的 TCS，复用它（说明已有编译在进行）
+            if (_processingTcs != null)
+            {
+                tcs = _processingTcs;
+            }
+            else
+            {
+                tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _processingTcs = tcs;
+            }
+        }
+
+        // 立即触发处理
+        ProcessPendingChanges();
+
+        // 等待编译完成
+        await tcs.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// 处理待处理的文件变更（由 FlushPendingChangesAsync 调用）
+    /// </summary>
+    private void ProcessPendingChanges()
     {
         if (_disposed)
             return;
@@ -173,20 +212,35 @@ internal sealed class FileWatcherService : IDisposable
         lock (_pendingChangesLock)
         {
             if (_pendingFileChanges.Count == 0)
+            {
+                // 没有待处理的变更，但可能有等待的 TCS 需要完成
+                CompleteProcessingTcs();
                 return;
+            }
 
             changesToProcess = new Dictionary<string, FileChangeType>(_pendingFileChanges);
             _pendingFileChanges.Clear();
+            _hasPendingChanges = false; // 清除待处理标记
         }
 
         _logger.LogInformation("Processing {Count} file change(s): {Files}", changesToProcess.Count, string.Join(", ", changesToProcess.Keys));
 
         // 确保不会同时处理多个变化
         if (!_processingLock.Wait(0))
+        {
+            // 如果已经在处理中，重新调度这些变更
+            lock (_pendingChangesLock)
+            {
+                foreach (var kvp in changesToProcess)
+                {
+                    _pendingFileChanges[kvp.Key] = kvp.Value;
+                }
+                _hasPendingChanges = true;
+            }
             return;
+        }
 
         // ========== 回调开始前：创建 MD5 快照 ==========
-        List<string> filesToSnapshot;
         lock (_stateLock)
         {
             _isInCallback = true;
@@ -255,6 +309,9 @@ internal sealed class FileWatcherService : IDisposable
                         }
 
                     }
+
+                    // 完成等待的 TCS
+                    CompleteProcessingTcs();
                 }
             });
         }
@@ -267,10 +324,27 @@ internal sealed class FileWatcherService : IDisposable
                 _isInCallback = false;
                 _applyingSnapshots.Clear();
             }
+            // 完成等待的 TCS（即使失败也要完成）
+            CompleteProcessingTcs();
         }
         finally
         {
             _processingLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 完成等待的 TaskCompletionSource
+    /// </summary>
+    private void CompleteProcessingTcs()
+    {
+        lock (_processingTcsLock)
+        {
+            if (_processingTcs != null)
+            {
+                _processingTcs.TrySetResult();
+                _processingTcs = null;
+            }
         }
     }
 
@@ -307,7 +381,6 @@ internal sealed class FileWatcherService : IDisposable
 
         _disposed = true;
 
-        _debounceTimer.Dispose();
         _processingLock.Dispose();
 
         try

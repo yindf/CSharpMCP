@@ -37,6 +37,9 @@ public class FindReferencesTool
                 return workspaceError;
             }
 
+            // 确保工作区是最新的（处理待处理的文件变更）
+            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 

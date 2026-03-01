@@ -465,6 +465,19 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// </summary>
     public bool IsWorkspaceLoaded => _currentSolution != null;
 
+    /// <summary>
+    /// 确保工作区是最新的（处理待处理的文件变更）
+    /// 用于符号查询前确保编译状态是最新的
+    /// </summary>
+    public async Task EnsureUpToDateAsync(CancellationToken cancellationToken = default)
+    {
+        if (_fileWatcher?.HasPendingChanges == true)
+        {
+            _logger.LogInformation("Flushing pending file changes before symbol query");
+            await _fileWatcher.FlushPendingChangesAsync(cancellationToken);
+        }
+    }
+
     private static async Task<bool> IsUnityProjectAsync(IEnumerable<Project> projects, CancellationToken cancellationToken)
     {
         foreach (var project in projects)

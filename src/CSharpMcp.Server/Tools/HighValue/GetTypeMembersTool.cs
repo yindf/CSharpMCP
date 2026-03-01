@@ -33,6 +33,9 @@ public class GetTypeMembersTool
                 return workspaceError;
             }
 
+            // 确保工作区是最新的（处理待处理的文件变更）
+            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+
             logger.LogInformation("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 

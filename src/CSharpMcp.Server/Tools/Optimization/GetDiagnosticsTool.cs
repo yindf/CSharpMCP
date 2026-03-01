@@ -34,6 +34,9 @@ public class GetDiagnosticsTool
                 return workspaceError;
             }
 
+            // 确保工作区是最新的（处理待处理的文件变更）
+            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+
             logger.LogInformation("Getting diagnostics for: {FilePath}", filePath ?? "entire workspace");
 
             var diagnostics = new List<DiagnosticItem>();

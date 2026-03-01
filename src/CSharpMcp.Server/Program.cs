@@ -26,7 +26,7 @@ public class Program
         });
 
         // Add file logging for debugging (disabled for production)
-        // builder.Logging.AddProvider(new FileLoggerProvider("C:/Project/CSharpMcp/mcp.log"));
+        builder.Logging.AddProvider(new FileLoggerProvider("C:/Project/CSharpMcp/mcp.log"));
 
         // Core services (injected into tool methods by MCP SDK)
         builder.Services.AddSingleton<IWorkspaceManager, WorkspaceManager>();

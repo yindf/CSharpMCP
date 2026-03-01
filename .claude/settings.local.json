@@ -16,7 +16,15 @@
       "mcp__zread__read_file",
       "Bash(Select-String:*)",
       "Bash(Select-Object:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfix: Add parameter types to JsonSerializationContext\n\n- Register FileLocationParams, LoadWorkspaceParams, and IReadOnlyList<FileLocationParams>\n- Add DiagnosticSeverity enum to serialization context\n- Combine source-generated context with reflection fallback using JsonTypeInfoResolver.Combine\n- This fixes JsonTypeInfo metadata errors for primitive types (bool, int, string)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "mcp__CSharpMcp__search_symbols",
+      "mcp__CSharpMcp__load_workspace",
+      "WebSearch",
+      "mcp__web-search-prime__webSearchPrime",
+      "mcp__web-reader__webReader",
+      "Bash(git commit:*)"
     ]
   }
 }
