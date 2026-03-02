@@ -100,28 +100,33 @@ public class FindReferencesTool
             .GroupBy(r => r.ReferenceLocation.Document.FilePath);
 
         long totalRefs = groupedByFile.Sum(g => g.Count());
+        var filesAffected = groupedByFile.Count();
+
+        // Summary at top
+        sb.AppendLine($"**Total**: {totalRefs} references in {filesAffected} file{(filesAffected != 1 ? "s" : "")}");
+        sb.AppendLine();
 
         if (compact)
         {
-            sb.AppendLine($"**Total**: {totalRefs} references across {groupedByFile.Count()} file{(groupedByFile.Count() != 1 ? "s" : "")}");
-            sb.AppendLine();
-
             foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
             {
                 var fileName = System.IO.Path.GetFileName(fileGroup.Key);
+                var fullFilePath = fileGroup.Key;
                 var count = fileGroup.Count();
-                sb.AppendLine($"- `{fileName}`: {count} reference{(count != 1 ? "s" : "")}");
+                sb.AppendLine($"- `{fullFilePath}`: {count} reference{(count != 1 ? "s" : "")}");
             }
             return sb.ToString();
         }
 
-        sb.AppendLine($"**Total References**: {totalRefs} in {referencedSymbols.Count} location{(referencedSymbols.Count != 1 ? "s" : "")}**");
-        sb.AppendLine();
-
+        // Detailed view with line content
         foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
         {
-            var fileName = System.IO.Path.GetFileName(fileGroup.Key);
+            var fullFilePath = fileGroup.Key;
+            var fileName = System.IO.Path.GetFileName(fullFilePath);
+            var refCount = fileGroup.Count();
+
             sb.AppendLine($"### {fileName}");
+            sb.AppendLine($"`{fullFilePath}` ({refCount} reference{(refCount != 1 ? "s" : "")})");
             sb.AppendLine();
 
             foreach (var refLoc in fileGroup.OrderBy(r => GetLineNumber(r.ReferenceLocation)))
@@ -133,17 +138,11 @@ public class FindReferencesTool
 
                 var lineText = await MarkdownHelper.ExtractLineTextAsync(refLoc.ReferenceLocation.Document, startLine, cancellationToken);
 
-                var lineRange = endLine > startLine ? $"L{startLine}-{endLine}" : $"L{startLine}";
-                sb.AppendLine($"- {lineRange}: {lineText?.Trim() ?? ""}");
+                var lineRange = endLine > startLine ? $"L{startLine}-L{endLine}" : $"L{startLine}";
+                sb.AppendLine($"- **{lineRange}**: `{lineText?.Trim() ?? ""}`");
             }
             sb.AppendLine();
         }
-
-        sb.AppendLine("**Summary**:");
-        var filesAffected = groupedByFile.Count();
-
-        sb.AppendLine($"- **Total References**: {totalRefs}");
-        sb.AppendLine($"- **Files Affected**: {filesAffected}");
 
         return sb.ToString();
     }
