@@ -80,4 +80,14 @@ public interface IWorkspaceManager
 
     Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
     Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 检查文件是否已被删除（物理文件不存在，但仍在 Workspace 中）
+    /// </summary>
+    bool IsFileDeleted(string filePath);
+
+    /// <summary>
+    /// 获取所有已删除的文件路径
+    /// </summary>
+    IReadOnlySet<string> GetDeletedFilePaths();
 }

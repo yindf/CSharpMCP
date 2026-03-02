@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,6 +42,7 @@ public class GetDiagnosticsTool
 
             var diagnostics = new List<DiagnosticItem>();
             var filesWithDiagnostics = new HashSet<string>();
+            var deletedFilePaths = workspaceManager.GetDeletedFilePaths();
 
             var compilation = await workspaceManager.GetCompilationAsync(cancellationToken: cancellationToken);
             var solution = workspaceManager.GetCurrentSolution();
@@ -51,6 +53,12 @@ public class GetDiagnosticsTool
 
             if (!string.IsNullOrEmpty(filePath))
             {
+                // 单文件模式：先检查是否已删除
+                if (workspaceManager.IsFileDeleted(filePath))
+                {
+                    return GetErrorHelpResponse($"File has been deleted: `{filePath}`");
+                }
+
                 var document = await workspaceManager.GetDocumentAsync(filePath, cancellationToken);
                 if (document == null)
                 {
@@ -62,10 +70,25 @@ public class GetDiagnosticsTool
             }
             else
             {
-                foreach (var project in solution.Projects)
+                // 全工作区模式：只遍历 UserProjects（Unity 项目会自动过滤 PackageCache）
+                foreach (var project in workspaceManager.GetProjects())
                 {
                     foreach (var document in project.Documents)
                     {
+                        // 跳过已删除的文件
+                        if (deletedFilePaths.Contains(document.FilePath))
+                        {
+                            logger.LogDebug("Skipping deleted file in diagnostics: {Path}", document.FilePath);
+                            continue;
+                        }
+
+                        // 跳过物理文件不存在的文档（双重保险）
+                        if (!string.IsNullOrEmpty(document.FilePath) && !File.Exists(document.FilePath))
+                        {
+                            logger.LogDebug("Skipping non-existent file: {Path}", document.FilePath);
+                            continue;
+                        }
+
                         var result = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
                         diagnostics.AddRange(result);
                     }

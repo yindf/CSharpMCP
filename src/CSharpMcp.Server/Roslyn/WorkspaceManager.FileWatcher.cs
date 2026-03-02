@@ -238,54 +238,18 @@ internal sealed partial class WorkspaceManager
                     }
                 }
 
-                // Handle deleted files
+                // Handle deleted files - mark them as deleted instead of immediate reload
                 if (deletedFiles.Count > 0)
                 {
-                    if (_isUnityProject)
+                    _logger.LogInformation("{Count} file(s) deleted, marking as deleted", deletedFiles.Count);
+
+                    foreach (var (documentId, filePath) in deletedFiles)
                     {
-                        // For Unity projects: modify .csproj to remove <Compile> entries
-                        foreach (var (documentId, filePath) in deletedFiles)
-                        {
-                            var project = currentSolution.GetProject(documentId.ProjectId);
-                            if (project != null)
-                            {
-                                RemoveCompileEntryFromCsproj(project.FilePath, filePath);
-                            }
-                        }
+                        MarkFileAsDeleted(filePath);
                     }
 
-                    // For both Unity and non-Unity: trigger reload
-                    // Unity: csproj was modified, will be detected as project change
-                    // Non-Unity: SDK-style projects auto-exclude deleted files, just need to reload
-                    _logger.LogInformation("Deleted {Count} file(s), triggering project reload", deletedFiles.Count);
-
-                    if (!string.IsNullOrEmpty(_loadedPath))
-                    {
-                        var extension = Path.GetExtension(_loadedPath).ToLowerInvariant();
-                        try
-                        {
-                            if (extension == ".sln" || extension == ".slnx")
-                            {
-                                var solution = await _workspace.OpenSolutionAsync(_loadedPath, progress: null, cancellationToken);
-                                _userProjects = null;
-                                _logger.LogInformation("Solution reloaded after file deletion");
-                                return solution;
-                            }
-                            else if (extension == ".csproj")
-                            {
-                                var project = await _workspace.OpenProjectAsync(_loadedPath, progress: null, cancellationToken);
-                                _userProjects = null;
-                                _logger.LogInformation("Project reloaded after file deletion");
-                                return project.Solution;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Failed to reload workspace after file deletion");
-                        }
-                    }
-
-                    return null;
+                    // Continue processing other file changes (modified/new files)
+                    // Don't return null here - let the documentUpdates/newDocuments logic continue
                 }
 
                 // Apply updates for modified and new files
@@ -313,6 +277,14 @@ internal sealed partial class WorkspaceManager
                         documentUpdates.Count, newDocuments.Count);
 
                     return solution;
+                }
+
+                // If only deleted files (no updates or new files), return current solution
+                // The deleted files are already marked, no need to modify the solution
+                if (deletedFiles.Count > 0)
+                {
+                    _logger.LogInformation("Only deleted files, returning current solution (files marked as deleted)");
+                    return currentSolution;
                 }
             }
 

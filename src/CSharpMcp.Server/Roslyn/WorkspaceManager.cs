@@ -27,6 +27,10 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     private int _isCompiling;
     private bool _isUnityProject;
 
+    // 已删除文件跟踪
+    private readonly HashSet<string> _deletedFilePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _deletedFilesLock = new();
+
     private IEnumerable<Project> UserProjects
     {
         get
@@ -181,6 +185,13 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// </summary>
     public async Task<Document?> GetDocumentAsync(string filePath, CancellationToken cancellationToken = default)
     {
+        // 跳过已删除的文件
+        if (IsFileDeleted(filePath))
+        {
+            _logger.LogDebug("Skipping deleted file: {Path}", filePath);
+            return null;
+        }
+
         if (_currentSolution == null)
         {
             _logger.LogInformation("Workspace not loaded, attempting auto-load");
@@ -475,6 +486,41 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         {
             _logger.LogInformation("Flushing pending file changes before symbol query");
             await _fileWatcher.FlushPendingChangesAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// 检查文件是否已被删除（物理文件不存在，但仍在 Workspace 中）
+    /// </summary>
+    public bool IsFileDeleted(string filePath)
+    {
+        lock (_deletedFilesLock)
+        {
+            return _deletedFilePaths.Contains(filePath);
+        }
+    }
+
+    /// <summary>
+    /// 获取所有已删除的文件路径
+    /// </summary>
+    public IReadOnlySet<string> GetDeletedFilePaths()
+    {
+        lock (_deletedFilesLock)
+        {
+            return new HashSet<string>(_deletedFilePaths, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// 标记文件为已删除
+    /// </summary>
+    internal void MarkFileAsDeleted(string filePath)
+    {
+        lock (_deletedFilesLock)
+        {
+            _deletedFilePaths.Add(filePath);
+            _logger.LogInformation("File marked as deleted: {Path} (total: {Count})",
+                filePath, _deletedFilePaths.Count);
         }
     }
 
