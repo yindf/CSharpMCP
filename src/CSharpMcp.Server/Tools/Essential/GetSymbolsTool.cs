@@ -117,6 +117,9 @@ public class GetSymbolsTool
     {
         var filtered = symbols.Where(s => !s.IsImplicitlyDeclared);
 
+        // 过滤掉属性访问器（get_ 和 set_ 方法）
+        filtered = filtered.Where(s => !IsPropertyAccessor(s));
+
         if (Enum.TryParse<Accessibility>(minVisibility, ignoreCase: true, out var minAccess) &&
             minAccess != Accessibility.Private)
         {
@@ -136,6 +139,20 @@ public class GetSymbolsTool
         }
 
         return filtered.ToImmutableList();
+    }
+
+    /// <summary>
+    /// 判断符号是否是属性访问器
+    /// </summary>
+    private static bool IsPropertyAccessor(ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+        {
+            return method.AssociatedSymbol is IPropertySymbol &&
+                   (method.MethodKind == MethodKind.PropertyGet ||
+                    method.MethodKind == MethodKind.PropertySet);
+        }
+        return false;
     }
 
     private static IEnumerable<ISymbol> FilterByAccessibility(IEnumerable<ISymbol> symbols, Accessibility minLevel)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -104,6 +105,38 @@ public static class MarkdownHelper
     {
         plural ??= singular + "s";
         return count == 1 ? singular : plural;
+    }
+
+
+    // ========== 路径简化 ==========
+
+    /// <summary>
+    /// 获取相对路径（基于工作区根目录）
+    /// </summary>
+    public static string GetShortPath(string? filePath)
+    {
+        if (string.IsNullOrEmpty(filePath))
+            return "";
+
+        try
+        {
+            var currentDir = Directory.GetCurrentDirectory();
+            var fullPath = Path.GetFullPath(filePath);
+            var relativePath = Path.GetRelativePath(currentDir, fullPath);
+            return relativePath.Replace('\\', '/');
+        }
+        catch
+        {
+            return filePath?.Replace('\\', '/') ?? "";
+        }
+    }
+
+    /// <summary>
+    /// 格式化文件位置为 markdown（紧凑格式）
+    /// </summary>
+    public static string FormatFileLocationCompact(string? filePath, int lineNumber)
+    {
+        return $"{GetShortPath(filePath)}:{lineNumber}";
     }
 
     /// <summary>

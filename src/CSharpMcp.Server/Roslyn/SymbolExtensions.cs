@@ -139,7 +139,7 @@ public static class SymbolExtensions
         {
             IMethodSymbol m => FormatMethodSignature(m),
             IPropertySymbol p => FormatPropertySignature(p),
-            IFieldSymbol f => $"{f.Type.ToDisplayString()} {f.Name}",
+            IFieldSymbol f => $"{OutputFormatter.ShortenTypeName(f.Type.ToDisplayString())} {f.Name}",
             IEventSymbol e => $"{e.Type.ToDisplayString()} {e.Name}",
             INamedTypeSymbol t => t.ToDisplayString(),
             _ => symbol.ToDisplayString()
@@ -152,17 +152,39 @@ public static class SymbolExtensions
         if (method.AssociatedSymbol != null && method.MethodKind == MethodKind.PropertyGet)
             return null;
 
-        var returnType = method.ReturnsVoid ? "void" : method.ReturnType.ToDisplayString();
-        var parameters = string.Join(", ", method.Parameters.Select(p => p.ToDisplayString()));
+        var returnType = method.ReturnsVoid ? "void" : OutputFormatter.ShortenTypeName(method.ReturnType.ToDisplayString());
+        var parameters = string.Join(", ", method.Parameters.Select(FormatParameter));
         return $"{returnType} {method.Name}({parameters})";
+    }
+
+    private static string FormatParameter(IParameterSymbol param)
+    {
+        var type = OutputFormatter.ShortenTypeName(param.Type.ToDisplayString());
+        var defaultValue = param.HasExplicitDefaultValue ? $" = {param.ExplicitDefaultValue?.ToString() ?? "null"}" : "";
+        var refKind = param.RefKind switch
+        {
+            RefKind.Ref => "ref ",
+            RefKind.Out => "out ",
+            RefKind.In => "in ",
+            _ => ""
+        };
+        return $"{refKind}{type} {param.Name}{defaultValue}";
     }
 
     private static string FormatPropertySignature(IPropertySymbol property)
     {
+        var type = OutputFormatter.ShortenTypeName(property.Type.ToDisplayString());
         var parameters = property.Parameters.Length > 0
-            ? $"[{string.Join(", ", property.Parameters.ToArray().Select(p => p.ToDisplayString()))}]"
+            ? $"[{string.Join(", ", property.Parameters.ToArray().Select(FormatParameter))}]"
             : "";
-        return $"{property.Type.ToDisplayString()} {property.Name}{parameters}";
+
+        var accessors = new List<string>();
+        if (property.GetMethod != null) accessors.Add("get");
+        if (property.SetMethod != null)
+            accessors.Add(property.SetMethod.IsInitOnly ? "init" : "set");
+
+        var accessorStr = accessors.Count > 0 ? $" {{{string.Join(", ", accessors)} }}" : "";
+        return $"{type} {property.Name}{parameters} {{ {accessorStr} }}";
     }
 
     // ========== 完整声明 ==========
