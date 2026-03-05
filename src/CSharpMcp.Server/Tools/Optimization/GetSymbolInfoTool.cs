@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
@@ -17,7 +17,7 @@ namespace CSharpMcp.Server.Tools.Optimization;
 [McpServerToolType]
 public class GetSymbolInfoTool
 {
-    [McpServerTool, Description("Get complete symbol information combining signature, documentation, references, inheritance, and call graph")]
+    [McpServerTool, Description("Get complete symbol information for LLM analysis. Returns signature, documentation, source code, type members, references summary, inheritance, and call graph in a single call.")]
     public static async Task<string> GetSymbolInfo(
         [Description("The name of the symbol to analyze")] string symbolName,
         IWorkspaceManager workspaceManager,
@@ -26,12 +26,10 @@ public class GetSymbolInfoTool
         CancellationToken cancellationToken,
         [Description("Path to the file containing the symbol")] string filePath = "",
         [Description("1-based line number near the symbol declaration")] int lineNumber = 0,
-        [Description("Whether to include method/property implementation")] bool includeBody = true,
-        [Description("Maximum lines of implementation code to include")] int maxBodyLines = 100,
-        [Description("Whether to include references to the symbol")] bool includeReferences = false,
-        [Description("Maximum number of references to show")] int maxReferences = 20,
-        [Description("Whether to include inheritance hierarchy")] bool includeInheritance = false,
-        [Description("Whether to include call graph (for methods only)")] bool includeCallGraph = false)
+        [Description("Maximum lines of source code to include (0 = no limit)")] int maxBodyLines = 100,
+        [Description("Maximum number of references to show with context")] int maxReferences = 10,
+        [Description("Maximum number of callers/callees in call graph")] int maxCallGraph = 10,
+        [Description("Maximum number of derived types to show")] int maxDerivedTypes = 5)
     {
         try
         {
@@ -41,7 +39,6 @@ public class GetSymbolInfoTool
                 return workspaceError;
             }
 
-            // 确保工作区是最新的（处理待处理的文件变更）
             await workspaceManager.EnsureUpToDateAsync(cancellationToken);
 
             logger.LogInformation("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
@@ -56,12 +53,10 @@ public class GetSymbolInfoTool
 
             var result = await BuildCompleteMarkdownAsync(
                 symbol,
-                includeBody,
                 maxBodyLines,
-                includeReferences,
                 maxReferences,
-                includeInheritance,
-                includeCallGraph,
+                maxCallGraph,
+                maxDerivedTypes,
                 workspaceManager.GetCurrentSolution(),
                 inheritanceAnalyzer,
                 logger,
@@ -83,19 +78,17 @@ public class GetSymbolInfoTool
         return MarkdownHelper.BuildErrorResponse(
             "Get Symbol Info",
             message,
-            "GetSymbolInfo(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,\n    symbolName: \"MyMethod\",\n    includeReferences: true,\n    includeInheritance: false,\n    includeCallGraph: false\n)",
-            "- `GetSymbolInfo(filePath: \"C:/MyProject/Service.cs\", lineNumber: 15, symbolName: \"ProcessData\")`\n- `GetSymbolInfo(filePath: \"./Models.cs\", lineNumber: 42, symbolName: \"User\", includeReferences: true, includeInheritance: true)`"
+            "GetSymbolInfo(\n    symbolName: \"MyMethod\",\n    filePath: \"path/to/File.cs\",  // optional\n    lineNumber: 42  // optional\n)",
+            "- `GetSymbolInfo(symbolName: \"ProcessData\")`\n- `GetSymbolInfo(symbolName: \"User\", filePath: \"./Models.cs\", lineNumber: 15)`"
         );
     }
 
     private static async Task<string> BuildCompleteMarkdownAsync(
         ISymbol symbol,
-        bool includeBody,
         int maxBodyLines,
-        bool includeReferences,
         int maxReferences,
-        bool includeInheritance,
-        bool includeCallGraph,
+        int maxCallGraph,
+        int maxDerivedTypes,
         Solution solution,
         IInheritanceAnalyzer inheritanceAnalyzer,
         ILogger<GetSymbolInfoTool> logger,
@@ -107,206 +100,375 @@ public class GetSymbolInfoTool
         var filePath = symbol.GetFilePath();
         var kind = symbol.GetDisplayKind();
 
-        sb.AppendLine($"# Complete Symbol Information: `{displayName}`");
+        // Header with concise location
+        sb.AppendLine($"# `{displayName}`");
+        sb.AppendLine();
+        sb.AppendLine($"**{kind}** | `{symbol.GetAccessibilityString()}` | {MarkdownHelper.FormatFileLocation(filePath, startLine)}");
         sb.AppendLine();
 
-        sb.AppendLine("## Basic Information");
-        sb.AppendLine();
-        sb.AppendLine($"- **Name**: `{displayName}`");
-        sb.AppendLine($"- **Kind**: {kind}");
-        sb.AppendLine($"- **Accessibility**: {symbol.GetAccessibilityString()}");
-
-        var containingType = symbol.GetContainingTypeName();
-        if (!string.IsNullOrEmpty(containingType))
-            sb.AppendLine($"- **Containing Type**: {containingType}");
-
-        var ns = symbol.GetNamespace();
-        if (!string.IsNullOrEmpty(ns))
-            sb.AppendLine($"- **Namespace**: {ns}");
-
-        if (startLine > 0)
-        {
-            var fileName = System.IO.Path.GetFileName(filePath);
-            sb.AppendLine($"- **Location**: `{fileName}:{startLine}-{endLine}`");
-        }
-
+        // Signature
         var signature = symbol.GetSignature();
         if (!string.IsNullOrEmpty(signature))
         {
-            sb.AppendLine($"- **Signature**: `{signature}`");
+            sb.AppendLine("## Signature");
+            sb.AppendLine();
+            sb.AppendLine("```csharp");
+            sb.AppendLine(signature);
+            sb.AppendLine("```");
+            sb.AppendLine();
         }
 
+        // Modifiers
         var modifiers = new List<string>();
         if (symbol.IsStatic) modifiers.Add("static");
         if (symbol.IsVirtual) modifiers.Add("virtual");
         if (symbol.IsOverride) modifiers.Add("override");
         if (symbol.IsAbstract) modifiers.Add("abstract");
+        if (symbol.IsSealed) modifiers.Add("sealed");
         if (modifiers.Count > 0)
         {
-            sb.AppendLine($"- **Modifiers**: {string.Join(", ", modifiers)}");
+            sb.AppendLine($"**Modifiers**: `{string.Join("`, `", modifiers)}`");
+            sb.AppendLine();
         }
 
-        sb.AppendLine();
+        // Context
+        var containingType = symbol.GetContainingTypeName();
+        var ns = symbol.GetNamespace();
+        if (!string.IsNullOrEmpty(containingType) || !string.IsNullOrEmpty(ns))
+        {
+            sb.AppendLine("## Context");
+            sb.AppendLine();
+            if (!string.IsNullOrEmpty(ns))
+                sb.AppendLine($"- **Namespace**: `{ns}`");
+            if (!string.IsNullOrEmpty(containingType))
+                sb.AppendLine($"- **Containing Type**: `{containingType}`");
+            sb.AppendLine();
+        }
 
-        var summary = symbol.GetSummaryComment();
+        // Documentation
         var fullComment = symbol.GetFullComment();
-
-        if (!string.IsNullOrEmpty(summary) || !string.IsNullOrEmpty(fullComment))
+        if (!string.IsNullOrEmpty(fullComment))
         {
             sb.AppendLine("## Documentation");
             sb.AppendLine();
-
-            if (!string.IsNullOrEmpty(fullComment))
-            {
-                sb.AppendLine(fullComment);
-            }
-            else if (!string.IsNullOrEmpty(summary))
-            {
-                sb.AppendLine(summary);
-            }
-
+            sb.AppendLine(fullComment);
             sb.AppendLine();
         }
 
-        var isMethod = symbol.Kind == SymbolKind.Method;
-
-        if (isMethod)
+        // Type-specific information
+        if (symbol is INamedTypeSymbol typeSymbol)
         {
-            var implementation = await symbol.GetFullImplementationAsync(maxBodyLines, cancellationToken);
-            if (!string.IsNullOrEmpty(implementation))
+            // Type Members
+            if (typeSymbol.TypeKind == TypeKind.Class || typeSymbol.TypeKind == TypeKind.Interface || typeSymbol.TypeKind == TypeKind.Struct)
             {
-                sb.AppendLine("## Source Code");
+                sb.AppendLine("## Members");
                 sb.AppendLine();
+                sb.AppendLine(await GetTypeMembersSummaryAsync(typeSymbol, cancellationToken));
+            }
 
-                var totalLines = endLine - startLine + 1;
-                if (maxBodyLines < totalLines)
+            // Inheritance
+            try
+            {
+                var tree = await inheritanceAnalyzer.GetInheritanceTreeAsync(
+                    typeSymbol, solution, includeDerived: true, maxDerivedDepth: 2, cancellationToken);
+
+                if (tree.BaseTypes.Count > 0 || tree.Interfaces.Count > 0 || tree.DerivedTypes.Count > 0)
                 {
-                    sb.AppendLine($"(showing {maxBodyLines} of {totalLines} total lines)");
+                    sb.AppendLine("## Inheritance");
                     sb.AppendLine();
-                }
 
-                sb.AppendLine("```csharp");
-                sb.AppendLine(implementation);
-                sb.AppendLine("```");
-                sb.AppendLine();
+                    if (tree.BaseTypes.Count > 0)
+                    {
+                        sb.AppendLine("**Base Types:**");
+                        foreach (var baseType in tree.BaseTypes)
+                            sb.AppendLine($"- `{baseType.ToDisplayString()}`");
+                        sb.AppendLine();
+                    }
+
+                    if (tree.Interfaces.Count > 0)
+                    {
+                        sb.AppendLine("**Implements:**");
+                        foreach (var iface in tree.Interfaces.Take(10))
+                            sb.AppendLine($"- `{iface.ToDisplayString()}`");
+                        if (tree.Interfaces.Count > 10)
+                            sb.AppendLine($"- ... ({tree.Interfaces.Count - 10} more)");
+                        sb.AppendLine();
+                    }
+
+                    if (tree.DerivedTypes.Count > 0)
+                    {
+                        sb.AppendLine($"**Derived Types** ({tree.DerivedTypes.Count} total):");
+                        foreach (var derived in tree.DerivedTypes.Take(maxDerivedTypes))
+                            sb.AppendLine($"- `{derived.ToDisplayString()}`");
+                        if (tree.DerivedTypes.Count > maxDerivedTypes)
+                            sb.AppendLine($"- ... ({tree.DerivedTypes.Count - maxDerivedTypes} more)");
+                        sb.AppendLine();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to get inheritance for symbol: {SymbolName}", symbol.Name);
             }
         }
 
-        if (includeReferences)
+        // Method-specific information
+        if (symbol is IMethodSymbol method)
         {
+            // Parameters
+            if (method.Parameters.Length > 0)
+            {
+                sb.AppendLine("## Parameters");
+                sb.AppendLine();
+                foreach (var param in method.Parameters)
+                {
+                    var defaultValue = param.HasExplicitDefaultValue ? $" = {param.ExplicitDefaultValue?.ToString() ?? "null"}" : "";
+                    var refKind = param.RefKind switch
+                    {
+                        RefKind.Ref => "ref ",
+                        RefKind.Out => "out ",
+                        RefKind.In => "in ",
+                        _ => ""
+                    };
+                    sb.AppendLine($"- `{refKind}{param.Type.ToDisplayString()} {param.Name}{defaultValue}`");
+                }
+                sb.AppendLine();
+            }
+
+            // Return type
+            sb.AppendLine("## Returns");
+            sb.AppendLine();
+            if (method.ReturnsVoid)
+            {
+                sb.AppendLine("`void`");
+            }
+            else
+            {
+                sb.AppendLine($"`{method.ReturnType.ToDisplayString()}`");
+                var returnComment = symbol.GetReturnComment();
+                if (!string.IsNullOrEmpty(returnComment))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(returnComment);
+                }
+            }
+            sb.AppendLine();
+
+            // Call graph using existing method
             try
             {
-                var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
-                    symbol,
-                    solution,
-                    cancellationToken)).ToImmutableList();
+                sb.Append(await method.GetCallGraphMarkdown(solution, maxCallGraph, maxCallGraph, cancellationToken));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to get call graph for symbol: {SymbolName}", symbol.Name);
+            }
+        }
 
-                if (referencedSymbols.Count > 0)
+        // Property-specific information
+        if (symbol is IPropertySymbol property)
+        {
+            sb.AppendLine("## Property Details");
+            sb.AppendLine();
+            sb.AppendLine($"- **Type**: `{property.Type.ToDisplayString()}`");
+            sb.AppendLine($"- **Read**: {(property.GetMethod != null ? "Yes" : "No")}");
+            sb.AppendLine($"- **Write**: {(property.SetMethod != null ? (property.SetMethod.IsInitOnly ? "init-only" : "Yes") : "No")}");
+            sb.AppendLine();
+        }
+
+        // Field-specific information
+        if (symbol is IFieldSymbol field)
+        {
+            sb.AppendLine("## Field Details");
+            sb.AppendLine();
+            sb.AppendLine($"- **Type**: `{field.Type.ToDisplayString()}`");
+            if (field.HasConstantValue)
+            {
+                sb.AppendLine($"- **Constant Value**: `{field.ConstantValue?.ToString() ?? "null"}`");
+            }
+            sb.AppendLine();
+        }
+
+        // Source code
+        var implementation = await symbol.GetFullImplementationAsync(maxBodyLines, cancellationToken);
+        if (!string.IsNullOrEmpty(implementation))
+        {
+            sb.AppendLine("## Source Code");
+            sb.AppendLine();
+
+            var totalLines = endLine - startLine + 1;
+            if (maxBodyLines > 0 && maxBodyLines < totalLines)
+            {
+                sb.AppendLine($"Showing {maxBodyLines} of {totalLines} lines:");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("```csharp");
+            sb.AppendLine(implementation);
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+
+        // References using existing helper
+        try
+        {
+            var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
+                symbol, solution, cancellationToken)).ToImmutableList();
+
+            var totalRefs = referencedSymbols.Sum(r => r.Locations.Count());
+            var filesAffected = referencedSymbols
+                .SelectMany(r => r.Locations)
+                .Select(l => l.Document.FilePath)
+                .Distinct()
+                .Count();
+
+            sb.AppendLine("## References");
+            sb.AppendLine();
+            sb.AppendLine($"**Total**: {totalRefs} references in {filesAffected} files");
+            sb.AppendLine();
+
+            if (totalRefs > 0)
+            {
+                // Top files
+                var groupedByFile = referencedSymbols
+                    .SelectMany(rs => rs.Locations.Select(loc => new { Location = loc, rs.Definition }))
+                    .GroupBy(r => r.Location.Document.FilePath)
+                    .OrderByDescending(g => g.Count())
+                    .Take(5);
+
+                sb.AppendLine("**Top files:**");
+                foreach (var fileGroup in groupedByFile)
                 {
-                    sb.AppendLine($"## References (showing first {Math.Min(maxReferences, referencedSymbols.Count)} locations)");
+                    var count = fileGroup.Count();
+                    sb.AppendLine($"- {MarkdownHelper.FormatFileLocation(fileGroup.Key, 0)}: {count} ref{(count != 1 ? "s" : "")}");
+                }
+
+                if (filesAffected > 5)
+                    sb.AppendLine($"- ... ({filesAffected - 5} more files)");
+
+                sb.AppendLine();
+
+                // Sample references with context
+                if (maxReferences > 0)
+                {
+                    sb.AppendLine("**Sample references:**");
                     sb.AppendLine();
 
-                    int shownLocations = 0;
+                    int shown = 0;
                     foreach (var refSym in referencedSymbols)
                     {
-                        if (shownLocations >= maxReferences)
-                            break;
+                        if (shown >= maxReferences) break;
 
                         foreach (var loc in refSym.Locations)
                         {
-                            if (shownLocations >= maxReferences)
-                                break;
+                            if (shown >= maxReferences) break;
 
-                            var refFilePath = loc.Document.FilePath;
-                            var refFileName = System.IO.Path.GetFileName(refFilePath);
                             var refLineSpan = loc.Location.GetLineSpan();
                             var refLine = refLineSpan.StartLinePosition.Line + 1;
 
                             var lineText = await MarkdownHelper.ExtractLineTextAsync(loc.Document, refLine, cancellationToken);
 
-                            sb.AppendLine($"- `{refFileName}:{refLine}`");
+                            sb.AppendLine($"- {loc.Location.ToFileNameWithLineNumber()}");
                             if (!string.IsNullOrEmpty(lineText))
                             {
-                                sb.AppendLine($"  - {lineText.Trim()}");
+                                sb.AppendLine($"  ```");
+                                sb.AppendLine($"  {lineText.Trim()}");
+                                sb.AppendLine($"  ```");
                             }
 
-                            shownLocations++;
+                            shown++;
                         }
                     }
 
-                    if (shownLocations < referencedSymbols.Sum(r => r.Locations.Count()))
-                    {
-                        sb.AppendLine($"- ... ({referencedSymbols.Sum(r => r.Locations.Count()) - shownLocations} more references)");
-                    }
+                    if (totalRefs > maxReferences)
+                        sb.AppendLine($"- ... ({totalRefs - maxReferences} more references)");
 
                     sb.AppendLine();
                 }
             }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to get references for symbol: {SymbolName}", symbol.Name);
-            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to get references for symbol: {SymbolName}", symbol.Name);
         }
 
-        if (includeInheritance)
+        return sb.ToString();
+    }
+
+    private static async Task<string> GetTypeMembersSummaryAsync(INamedTypeSymbol type, CancellationToken cancellationToken)
+    {
+        var sb = new StringBuilder();
+        await Task.CompletedTask; // Suppress warning
+
+        var properties = type.GetMembers().OfType<IPropertySymbol>().ToList();
+        var methods = type.GetMembers().OfType<IMethodSymbol>()
+            .Where(m => m.MethodKind == MethodKind.Ordinary).ToList();
+        var fields = type.GetMembers().OfType<IFieldSymbol>().ToList();
+        var events = type.GetMembers().OfType<IEventSymbol>().ToList();
+        var nestedTypes = type.GetMembers().OfType<INamedTypeSymbol>().ToList();
+
+        if (properties.Count > 0)
         {
-            if (symbol is INamedTypeSymbol type)
+            sb.AppendLine($"### Properties ({properties.Count})");
+            foreach (var prop in properties.Take(15))
             {
-                try
-                {
-                    var tree = await inheritanceAnalyzer.GetInheritanceTreeAsync(
-                        type,
-                        solution,
-                        includeDerived: false,
-                        maxDerivedDepth: 0,
-                        cancellationToken);
+                var accessors = new List<string>();
+                if (prop.GetMethod != null) accessors.Add("get");
+                if (prop.SetMethod != null) accessors.Add(prop.SetMethod.IsInitOnly ? "init" : "set");
+                var accessorStr = accessors.Count > 0 ? $" {{{string.Join(", ", accessors)}}}" : "";
 
-                    if (tree.BaseTypes.Count > 0 || tree.Interfaces.Count > 0)
-                    {
-                        sb.AppendLine("## Inheritance");
-                        sb.AppendLine();
-
-                        if (tree.BaseTypes.Count > 0)
-                        {
-                            sb.AppendLine("### Base Types");
-                            foreach (var baseType in tree.BaseTypes)
-                            {
-                                sb.AppendLine($"- {baseType.ToDisplayString()}");
-                            }
-                            sb.AppendLine();
-                        }
-
-                        if (tree.Interfaces.Count > 0)
-                        {
-                            sb.AppendLine("### Interfaces");
-                            foreach (var iface in tree.Interfaces)
-                            {
-                                sb.AppendLine($"- {iface.ToDisplayString()}");
-                            }
-                            sb.AppendLine();
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to get inheritance for symbol: {SymbolName}", symbol.Name);
-                }
+                sb.AppendLine($"- `{prop.Type.ToDisplayString()} {prop.Name}{accessorStr}`");
             }
+            if (properties.Count > 15)
+                sb.AppendLine($"- ... ({properties.Count - 15} more)");
+            sb.AppendLine();
         }
 
-        if (includeCallGraph)
+        if (methods.Count > 0)
         {
-            if (symbol is IMethodSymbol method)
+            sb.AppendLine($"### Methods ({methods.Count})");
+            foreach (var method in methods.Take(15))
             {
-                try
-                {
-                    sb.Append(await method.GetCallGraphMarkdown(solution, 10, 10, cancellationToken));
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to get call graph for symbol: {SymbolName}", symbol.Name);
-                }
+                sb.AppendLine($"- `{method.GetSignature()}`");
             }
+            if (methods.Count > 15)
+                sb.AppendLine($"- ... ({methods.Count - 15} more)");
+            sb.AppendLine();
+        }
+
+        if (fields.Count > 0)
+        {
+            sb.AppendLine($"### Fields ({fields.Count})");
+            foreach (var field in fields.Take(10))
+            {
+                var modifier = field.IsStatic && field.IsConst ? "const " : (field.IsStatic ? "static " : "");
+                sb.AppendLine($"- `{modifier}{field.Type.ToDisplayString()} {field.Name}`");
+            }
+            if (fields.Count > 10)
+                sb.AppendLine($"- ... ({fields.Count - 10} more)");
+            sb.AppendLine();
+        }
+
+        if (events.Count > 0)
+        {
+            sb.AppendLine($"### Events ({events.Count})");
+            foreach (var ev in events.Take(10))
+            {
+                sb.AppendLine($"- `{ev.Type.ToDisplayString()} {ev.Name}`");
+            }
+            if (events.Count > 10)
+                sb.AppendLine($"- ... ({events.Count - 10} more)");
+            sb.AppendLine();
+        }
+
+        if (nestedTypes.Count > 0)
+        {
+            sb.AppendLine($"### Nested Types ({nestedTypes.Count})");
+            foreach (var nested in nestedTypes)
+            {
+                sb.AppendLine($"- `{nested.TypeKind} {nested.Name}`");
+            }
+            sb.AppendLine();
         }
 
         return sb.ToString();

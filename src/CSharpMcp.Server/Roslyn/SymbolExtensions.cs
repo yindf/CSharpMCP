@@ -238,6 +238,30 @@ public static class SymbolExtensions
         return string.IsNullOrEmpty(summary) ? null : summary;
     }
 
+    /// <summary>
+    /// 获取方法的返回值文档注释
+    /// </summary>
+    public static string? GetReturnComment(this ISymbol symbol)
+    {
+        var xmlComment = symbol.GetDocumentationCommentXml();
+        if (string.IsNullOrEmpty(xmlComment)) return null;
+
+        var returnsStart = xmlComment.IndexOf("<returns>");
+        if (returnsStart < 0) return null;
+
+        returnsStart += "<returns>".Length;
+        var returnsEnd = xmlComment.IndexOf("</returns>", returnsStart);
+        if (returnsEnd < 0) return null;
+
+        var returns = xmlComment.Substring(returnsStart, returnsEnd - returnsStart);
+        returns = Regex.Replace(returns, "<see[^>]*>([^<]+)</see>", "$1");
+        returns = Regex.Replace(returns, "<paramref[^>]*>([^<]+)</paramref>", "$1");
+        returns = HtmlDecode(returns);
+        returns = Regex.Replace(returns, @"\s+", " ").Trim();
+
+        return string.IsNullOrEmpty(returns) ? null : returns;
+    }
+
     private static string HtmlDecode(string text) =>
         HttpUtility.HtmlDecode(text);
 
