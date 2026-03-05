@@ -128,6 +128,22 @@ Use `SymbolExtensions.FindSymbolAsync` for resolving symbols from `FileLocationP
 | **Essential** | `load_workspace`, `get_symbols`, `go_to_definition`, `find_references`, `resolve_symbol`, `search_symbols` | Core navigation |
 | **HighValue** | `get_inheritance_hierarchy`, `get_call_graph`, `get_type_members` | Deep analysis |
 | **Optimization** | `get_symbol_info`, `batch_get_symbols`, `get_diagnostics` | Token-efficient queries |
+
+### Symbol Disambiguation
+
+Many tools now support intelligent symbol disambiguation when multiple symbols match a name:
+
+- **Auto-selection priority**: Tools automatically select the most relevant symbol based on context
+  - `get_implementations`: Interface > Abstract class > Abstract method > Virtual method > Regular method
+  - `get_symbol_info`: Types > Methods/Properties > Fields
+- **Disambiguation list**: When auto-selection is not possible, tools return a formatted list of candidates with:
+  - Symbol kind and display name
+  - File location and line number
+  - Containing type (for members)
+  - Implementation hints (e.g., `[Interface]`, `[Abstract]`, `[Virtual]`)
+- **Resolution methods**:
+  1. Specify `symbolKind` parameter: `"NamedType"`, `"Method"`, `"Property"`, `"Field"`
+  2. Provide `filePath` and `lineNumber` for precise location
 | **Refactoring** | `rename_symbol` | Code transformations |
 
 ## Environment Variables

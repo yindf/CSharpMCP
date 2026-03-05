@@ -96,6 +96,7 @@ Find all references to a symbol.
   "file_path": "string (required)",
   "line_number": "int? (optional)",
   "symbol_name": "string? (optional)",
+  "symbol_kind": "string (optional) - Filter by symbol kind: NamedType, Method, Property, Field",
   "include_context": "bool (optional) - Whether to include context code",
   "context_lines": "int (optional) - Context code line count"
 }
@@ -169,6 +170,7 @@ Search symbols across the entire workspace.
 ```json
 {
   "query": "string (required) - Search query, supports wildcards like My.*, *.Controller",
+  "symbol_kind": "string (optional) - Filter by symbol kind: NamedType, Method, Property, Field",
   "detail_level": "DetailLevel (optional)",
   "max_results": "int (optional) - Maximum result count, default 100"
 }
@@ -190,6 +192,41 @@ Search symbols across the entire workspace.
 
 ### HighValue Tools (Advanced Tools)
 
+#### `get_implementations`
+
+Find all implementations of an interface, abstract class, or virtual/abstract method.
+
+**Parameters**:
+```json
+{
+  "symbolName": "string (required) - The name of the interface, base class, or method",
+  "filePath": "string (optional) - Path to the file containing the symbol",
+  "lineNumber": "int (optional) - 1-based line number near the symbol declaration",
+  "symbolKind": "string (optional) - Filter by symbol kind: NamedType, Method, Property",
+  "maxResults": "int (optional) - Maximum number of implementations to return, default 50"
+}
+```
+
+**Smart Disambiguation**:
+When multiple symbols match the name, the tool automatically selects by priority:
+1. Interface > Abstract class > Abstract method > Virtual method > Regular method
+2. If auto-selection fails, returns a disambiguation list with all candidates
+
+**Response**:
+```markdown
+# Implementations: `IInterface`
+
+## Summary
+Found **5** implementation(s)
+**Kind**: Interface
+
+## Implementations
+- **Class1** | `Class` | File1.cs:10
+- **Class2** | `Class` | File2.cs:25
+```
+
+---
+
 #### `get_inheritance_hierarchy`
 
 Get type inheritance hierarchy.
@@ -200,6 +237,7 @@ Get type inheritance hierarchy.
   "file_path": "string (required)",
   "line_number": "int? (optional)",
   "symbol_name": "string? (optional)",
+  "symbol_kind": "string (optional) - Filter by symbol kind: NamedType (class/interface/struct)",
   "include_derived": "bool (optional) - Whether to include derived types",
   "max_derived_depth": "int (optional) - Maximum derived type depth"
 }
@@ -268,6 +306,7 @@ Get type members.
   "file_path": "string (required)",
   "line_number": "int? (optional)",
   "symbol_name": "string? (optional)",
+  "symbol_kind": "string (optional) - Filter by symbol kind: NamedType",
   "include_inherited": "bool (optional) - Whether to include inherited members",
   "filter_kinds": "SymbolKind[] (optional) - Member type filter"
 }

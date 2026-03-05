@@ -96,6 +96,7 @@ public void MethodName(string param)
   "file_path": "string (必需)",
   "line_number": "int? (可选)",
   "symbol_name": "string? (可选)",
+  "symbol_kind": "string (可选) - 按符号类型过滤: NamedType, Method, Property, Field",
   "include_context": "bool (可选) - 是否包含上下文代码",
   "context_lines": "int (可选) - 上下文代码行数"
 }
@@ -169,6 +170,7 @@ void MethodName(string param);
 ```json
 {
   "query": "string (必需) - 搜索查询，支持通配符如 My.*, *.Controller",
+  "symbol_kind": "string (可选) - 按符号类型过滤: NamedType, Method, Property, Field",
   "detail_level": "DetailLevel (可选)",
   "max_results": "int (可选) - 最大结果数量，默认 100"
 }
@@ -189,6 +191,41 @@ void MethodName(string param);
 ---
 
 ### HighValue 工具 (高级工具)
+
+#### `get_implementations`
+
+查找接口、抽象类或虚方法/抽象方法的所有实现。
+
+**参数**:
+```json
+{
+  "symbolName": "string (必需) - 接口、基类或方法的名称",
+  "filePath": "string (可选) - 包含符号的文件路径",
+  "lineNumber": "int (可选) - 符号声明附近的 1-based 行号",
+  "symbolKind": "string (可选) - 按符号类型过滤: NamedType, Method, Property",
+  "maxResults": "int (可选) - 返回的最大实现数量，默认 50"
+}
+```
+
+**智能消歧**:
+当多个符号匹配名称时，工具按优先级自动选择:
+1. 接口 > 抽象类 > 抽象方法 > 虚方法 > 普通方法
+2. 如果自动选择失败，返回候选列表供用户选择
+
+**响应**:
+```markdown
+# Implementations: `IInterface`
+
+## Summary
+Found **5** implementation(s)
+**Kind**: Interface
+
+## Implementations
+- **Class1** | `Class` | File1.cs:10
+- **Class2** | `Class` | File2.cs:25
+```
+
+---
 
 #### `get_inheritance_hierarchy`
 
