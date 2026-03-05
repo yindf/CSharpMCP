@@ -91,7 +91,7 @@ public class GetTypeMembersTool
             : type.GetMembers();
 
         return allMembers
-            .Where(m => !m.IsImplicitlyDeclared)
+            .Where(m => m.ShouldDisplay())  // Filter property accessors, event accessors, backing fields
             .Where(m => m.Locations.FirstOrDefault()?.IsInMetadata != true)
             .ToList();
     }
@@ -118,9 +118,6 @@ public class GetTypeMembersTool
 
             foreach (var member in kindGroup.OrderBy(m => m.GetDisplayName()))
             {
-                if (member.IsImplicitlyDeclared)
-                    continue;
-
                 var displayName = member.GetDisplayName();
                 var (startLine, endLine) = member.GetLineRange();
                 var displayKind = member.GetDisplayKind();

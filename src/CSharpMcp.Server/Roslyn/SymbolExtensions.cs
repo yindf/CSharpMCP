@@ -694,4 +694,72 @@ public static class SymbolExtensions
             .Select(n => semanticModel.GetDeclaredSymbol(n))
             .Where(s => s != null);
     }
+
+    // ========== Symbol Filtering ==========
+
+    /// <summary>
+    /// 判断符号是否是属性访问器 (get/set 方法)
+    /// </summary>
+    public static bool IsPropertyAccessor(this ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+        {
+            return method.AssociatedSymbol is IPropertySymbol &&
+                   (method.MethodKind == MethodKind.PropertyGet ||
+                    method.MethodKind == MethodKind.PropertySet);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 判断符号是否是事件访问器 (add/remove 方法)
+    /// </summary>
+    public static bool IsEventAccessor(this ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+        {
+            return method.AssociatedSymbol is IEventSymbol &&
+                   (method.MethodKind == MethodKind.EventAdd ||
+                    method.MethodKind == MethodKind.EventRemove);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 判断字段是否是自动属性的 backing field
+    /// Backing field 名称格式为 "&lt;PropertyName&gt;k__BackingField"
+    /// </summary>
+    public static bool IsBackingField(this ISymbol symbol)
+    {
+        if (symbol is not IFieldSymbol field)
+            return false;
+
+        // Backing fields for auto-properties have compiler-generated names like <PropertyName>k__BackingField
+        return field.IsImplicitlyDeclared ||
+               (field.Name.StartsWith("<") && field.Name.Contains(">k__BackingField"));
+    }
+
+    /// <summary>
+    /// 判断符号是否应该显示给用户（过滤编译器生成的隐藏符号）
+    /// </summary>
+    public static bool ShouldDisplay(this ISymbol symbol)
+    {
+        // 过滤隐式声明的符号（除了属性和事件本身）
+        if (symbol.IsImplicitlyDeclared && symbol is not IPropertySymbol and not IEventSymbol)
+            return false;
+
+        // 过滤属性访问器
+        if (symbol.IsPropertyAccessor())
+            return false;
+
+        // 过滤事件访问器
+        if (symbol.IsEventAccessor())
+            return false;
+
+        // 过滤 backing fields
+        if (symbol.IsBackingField())
+            return false;
+
+        return true;
+    }
 }

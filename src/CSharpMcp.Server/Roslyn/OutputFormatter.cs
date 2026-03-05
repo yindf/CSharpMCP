@@ -323,12 +323,14 @@ public static class OutputFormatter
         var sb = new StringBuilder();
         var memberList = members.ToList();
 
-        // 按类型分组
+        // 按类型分组，过滤 backing fields
         var properties = memberList.OfType<IPropertySymbol>().Take(maxItems).ToList();
         var methods = memberList.OfType<IMethodSymbol>()
             .Where(m => m.MethodKind == MethodKind.Ordinary)
             .Take(maxItems).ToList();
-        var fields = memberList.OfType<IFieldSymbol>().Take(maxItems).ToList();
+        var fields = memberList.OfType<IFieldSymbol>()
+            .Where(f => !f.IsBackingField())
+            .Take(maxItems).ToList();
 
         if (properties.Count > 0)
         {

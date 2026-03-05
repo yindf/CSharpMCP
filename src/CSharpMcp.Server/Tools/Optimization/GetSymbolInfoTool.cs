@@ -500,7 +500,8 @@ public class GetSymbolInfoTool
         var properties = type.GetMembers().OfType<IPropertySymbol>().ToList();
         var methods = type.GetMembers().OfType<IMethodSymbol>()
             .Where(m => m.MethodKind == MethodKind.Ordinary).ToList();
-        var fields = type.GetMembers().OfType<IFieldSymbol>().ToList();
+        var fields = type.GetMembers().OfType<IFieldSymbol>()
+            .Where(f => !f.IsBackingField()).ToList();
         var events = type.GetMembers().OfType<IEventSymbol>().ToList();
         var nestedTypes = type.GetMembers().OfType<INamedTypeSymbol>().ToList();
 
