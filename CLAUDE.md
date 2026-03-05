@@ -87,7 +87,24 @@ The workspace manager supports multiple path formats:
 - Auto-discovers .sln files by traversing up directory tree
 
 ### Token Optimization Strategies
+
+**IMPORTANT**: All tools return **Markdown-formatted strings** for LLM-friendly output.
+
 Tools use `detail_level` parameter (Compact, Summary, Standard, Full) to control output verbosity. Always prefer lower detail levels for quick exploration.
+
+#### Key Optimization Patterns:
+
+1. **Use `get_symbol_info` for complete information** - One call replaces multiple separate calls (get_definition + find_references + get_call_graph + get_inheritance_hierarchy)
+
+2. **Use `batch_get_symbols` for multiple symbols** - Parallel processing, single response
+
+3. **Control output size with parameters**:
+   - `max_body_lines` (default 50) - Limit source code lines
+   - `max_references` (default 10) - Limit reference count
+   - `max_results` - Limit search results
+   - `include_body: false` - Skip implementation code when only signature is needed
+
+4. **Fuzzy matching supported** - Tools accept filename-only paths and use line_number for disambiguation
 
 ### Unity Project Support
 When Unity is detected (UnityEngine namespace found), the workspace manager filters out projects in `Packages/` or `PackageCache/` directories via the `UserProjects` property.
@@ -101,7 +118,17 @@ Use `SymbolExtensions.FindSymbolAsync` for resolving symbols from `FileLocationP
 2. Add `[JsonSerializable(typeof(YourParams))]` to `JsonSerializationContext`
 3. Create tool class in appropriate `Tools/` subdirectory with `[McpServerToolType]` and `[McpServerTool]` attributes
 4. Inject `IWorkspaceManager` via constructor if needed
-5. Return markdown-formatted strings for responses
+5. **Return markdown-formatted strings for responses** (use `StringBuilder` with markdown headers, lists, code blocks)
+6. Use `MarkdownHelper` for consistent error formatting: `BuildErrorResponse()`, `BuildSymbolNotFoundErrorDetailsAsync()`
+
+## Tool Categories (Updated)
+
+| Category | Tools | Purpose |
+|----------|-------|---------|
+| **Essential** | `load_workspace`, `get_symbols`, `go_to_definition`, `find_references`, `resolve_symbol`, `search_symbols` | Core navigation |
+| **HighValue** | `get_inheritance_hierarchy`, `get_call_graph`, `get_type_members` | Deep analysis |
+| **Optimization** | `get_symbol_info`, `batch_get_symbols`, `get_diagnostics` | Token-efficient queries |
+| **Refactoring** | `rename_symbol` | Code transformations |
 
 ## Environment Variables
 

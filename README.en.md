@@ -180,34 +180,154 @@ CSharpMcp/
 | MCP SDK | 0.2.0-preview | Model Context Protocol |
 | xUnit | 2.* | Testing framework |
 
-## Token Optimization
+## Important Notes
 
-This server is optimized for token usage in multiple ways:
+### Output Format
 
-### 1. Tiered Responses
+**All tool outputs are in Markdown format**, making it easy for LLMs to understand and process directly. The output structure is clear, containing headings, lists, code blocks, and other formatted elements.
+
+#### Output Examples
+
+**`get_definition` output example:**
+
+```markdown
+## Symbol: `ProcessData`
+
+**Basic Info**:
+- **Kind**: Method
+- **Accessibility**: public
+- **Containing Type**: MyNamespace.DataService
+- **Location**: `DataService.cs:45-78`
+
+**Signature**:
+```csharp
+public async Task<Result> ProcessData(
+    string input,
+    CancellationToken cancellationToken = default)
+```
+
+**Documentation**:
+Process input data and return result
+
+**Implementation**:
+```csharp
+public async Task<Result> ProcessData(
+    string input,
+    CancellationToken cancellationToken = default)
+{
+    if (string.IsNullOrEmpty(input))
+        throw new ArgumentException("Input cannot be null");
+
+    var data = await _repository.GetDataAsync(cancellationToken);
+    return _processor.Transform(data);
+}
+```
+```
+
+**`find_references` output example:**
+
+```markdown
+## References: `ProcessData`
+
+**Found 5 references in 3 files**
+
+### DataService.cs
+- L52: `await ProcessData(input, token);`
+- L89: `var result = ProcessData(data);`
+
+### DataController.cs
+- L34: `return await _service.ProcessData(request);`
+
+### DataServiceTests.cs
+- L15: `var result = _service.ProcessData("test");`
+- L22: `await _service.ProcessData(null);`
+```
+
+**`get_call_graph` output example:**
+
+```markdown
+## Call Graph: `ProcessData`
+
+**Callers (2)**:
+- `DataController.Post()` - DataController.cs:34
+- `DataController.Get()` - DataController.cs:56
+
+**Callees (3)**:
+- `_repository.GetDataAsync()` - Repository.cs:23
+- `_processor.Transform()` - Processor.cs:15
+- `ThrowHelper.ArgError()` - ThrowHelper.cs:8
+```
+
+### Token Optimization Strategies
+
+This server is deeply optimized for LLM token usage, helping reduce call count and token consumption:
+
+#### 1. Get Complete Information in One Call (Recommended)
+
+**Avoid Multiple Calls**: Use `get_symbol_complete` or `get_symbol_info` to get complete symbol information at once, including:
+- Symbol signature and documentation
+- Source code implementation
+- Reference list
+- Inheritance hierarchy
+- Call graph
+
+```json
+{
+  "name": "get_symbol_info",
+  "arguments": {
+    "symbol_name": "MyClass",
+    "max_body_lines": 50,
+    "max_references": 10
+  }
+}
+```
+
+#### 2. Batch Queries
+
+**Process Multiple Symbols in Parallel**: Use `batch_get_symbols` to get information for multiple symbols at once:
+
+```json
+{
+  "name": "batch_get_symbols",
+  "arguments": {
+    "symbols": [
+      {"symbol_name": "Method1", "line_number": 25},
+      {"symbol_name": "Method2", "line_number": 50}
+    ],
+    "detail_level": "Summary"
+  }
+}
+```
+
+#### 3. Tiered Responses
 
 Use the `detail_level` parameter to control output verbosity:
 
-- `Compact` - Name and location only
-- `Summary` - Brief information
+- `Compact` - Name and location only (quick browsing)
+- `Summary` - Brief information (recommended default)
 - `Standard` - Standard information
-- `Full` - Complete information
+- `Full` - Complete information (use only when needed)
 
-### 2. Smart Truncation
+#### 4. Smart Truncation Parameters
 
-- `body_max_lines` - Limit source code lines
-- `max_references` - Limit reference count
+- `body_max_lines` / `max_body_lines` - Limit source code lines (default 50)
+- `max_references` - Limit reference count (default 10)
 - `max_results` - Limit search results
+- `max_callers` / `max_callees` - Limit call graph depth
 
-### 3. Batch Operations
+#### 5. On-Demand Loading
 
-- `batch_get_symbols` - Process multiple queries in parallel
-- `get_symbol_complete` - Get all information at once
+- `sections` parameter - Specify required information sections (Signature, Documentation, Body, References, etc.)
+- `filter_kinds` parameter - Filter symbol types (Method, Property, Field, etc.)
+- `include_body` - Whether to include implementation code (default true)
+- `include_inherited` - Whether to include inherited members
 
-### 4. On-Demand Loading
+#### 6. Fuzzy Matching
 
-- `sections` parameter - Specify required information sections
-- `filter_kinds` parameter - Filter symbol types
+All tools support **fuzzy path matching**, no need to provide full paths:
+- Filename only: `"MyClass.cs"`
+- Relative path: `"./Services/MyService.cs"`
+- Line number for precise location: `line_number` parameter helps locate symbols accurately
 
 ## Development
 

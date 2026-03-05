@@ -186,34 +186,156 @@ CSharpMcp/
 | Serilog | 3.* | 结构化日志 |
 | xUnit | 2.* | 测试框架 |
 
-## Token 优化
+## 重要说明
 
-本服务器针对 Token 使用进行了多种优化：
+### 输出格式
 
-### 1. 分层响应
+**所有工具的输出均为 Markdown 格式**，便于大模型直接理解和处理。输出结构清晰，包含标题、列表、代码块等格式化元素。
 
-使用 `detail_level` 参数控制输出详细程度：
+#### 输出示例
 
-- `Compact` - 仅名称和位置
-- `Summary` - 简要信息
+**`get_definition` 输出示例：**
+
+```markdown
+## Symbol: `ProcessData`
+
+**Basic Info**:
+- **Kind**: Method
+- **Accessibility**: public
+- **Containing Type**: MyNamespace.DataService
+- **Location**: `DataService.cs:45-78`
+
+**Signature**:
+```csharp
+public async Task<Result> ProcessData(
+    string input,
+    CancellationToken cancellationToken = default)
+```
+
+**Documentation**:
+处理输入数据并返回结果
+
+**Implementation**:
+```csharp
+public async Task<Result> ProcessData(
+    string input,
+    CancellationToken cancellationToken = default)
+{
+    if (string.IsNullOrEmpty(input))
+        throw new ArgumentException("Input cannot be null");
+
+    var data = await _repository.GetDataAsync(cancellationToken);
+    return _processor.Transform(data);
+}
+```
+```
+
+**`find_references` 输出示例：**
+
+```markdown
+## References: `ProcessData`
+
+**Found 5 references in 3 files**
+
+### DataService.cs
+- L52: `await ProcessData(input, token);`
+- L89: `var result = ProcessData(data);`
+
+### DataController.cs
+- L34: `return await _service.ProcessData(request);`
+
+### DataServiceTests.cs
+- L15: `var result = _service.ProcessData("test");`
+- L22: `await _service.ProcessData(null);`
+```
+
+**`get_call_graph` 输出示例：**
+
+```markdown
+## Call Graph: `ProcessData`
+
+**Callers (2)**:
+- `DataController.Post()` - DataController.cs:34
+- `DataController.Get()` - DataController.cs:56
+
+**Callees (3)**:
+- `_repository.GetDataAsync()` - Repository.cs:23
+- `_processor.Transform()` - Processor.cs:15
+- `ThrowHelper.ArgError()` - ThrowHelper.cs:8
+```
+
+### Token 优化策略
+
+本服务器针对 LLM Token 使用进行了深度优化，帮助减少调用次数和 Token 消耗：
+
+#### 1. 一次调用获取完整信息（推荐）
+
+**避免多次调用**：使用 `get_symbol_complete` 或 `get_symbol_info` 一次性获取符号的完整信息，包括：
+- 符号签名和文档
+- 源代码实现
+- 引用列表
+- 继承层次
+- 调用图
+
+```json
+{
+  "name": "get_symbol_info",
+  "arguments": {
+    "symbol_name": "MyClass",
+    "max_body_lines": 50,
+    "max_references": 10
+  }
+}
+```
+
+#### 2. 批量查询
+
+**并行处理多个符号**：使用 `batch_get_symbols` 一次获取多个符号信息：
+
+```json
+{
+  "name": "batch_get_symbols",
+  "arguments": {
+    "symbols": [
+      {"symbol_name": "ClassA", "line_number": 10},
+      {"symbol_name": "MethodB", "line_number": 25},
+      {"symbol_name": "PropertyC", "line_number": 40}
+    ],
+    "include_body": true,
+    "max_body_lines": 30
+  }
+}
+```
+
+#### 3. 分层响应控制
+
+使用 `detail_level` 参数控制输出详细程度，**优先使用较低级别**：
+
+- `Compact` - 仅名称和位置（快速浏览）
+- `Summary` - 简要信息（推荐默认）
 - `Standard` - 标准信息
-- `Full` - 完整信息
+- `Full` - 完整信息（仅在需要时使用）
 
-### 2. 智能截断
+#### 4. 智能截断参数
 
-- `body_max_lines` - 限制源代码行数
-- `max_references` - 限制引用数量
+- `body_max_lines` / `max_body_lines` - 限制源代码行数（默认 50）
+- `max_references` - 限制引用数量（默认 10）
 - `max_results` - 限制搜索结果
+- `max_callers` / `max_callees` - 限制调用图深度
 
-### 3. 批量操作
+#### 5. 按需加载
 
-- `batch_get_symbols` - 并行处理多个查询
-- `get_symbol_complete` - 一次性获取所有信息
+- `sections` 参数 - 指定需要的信息部分（Signature, Documentation, Body, References 等）
+- `filter_kinds` 参数 - 过滤符号类型（Method, Property, Field 等）
+- `include_body` - 是否包含实现代码（默认 true）
+- `include_inherited` - 是否包含继承成员
 
-### 4. 按需加载
+#### 6. 模糊匹配
 
-- `sections` 参数 - 指定需要的信息部分
-- `filter_kinds` 参数 - 过滤符号类型
+所有工具支持**模糊路径匹配**，无需提供完整路径：
+- 文件名即可：`"MyClass.cs"`
+- 相对路径：`"./Services/MyService.cs"`
+- 行号辅助定位：`line_number` 参数帮助精确定位符号
 
 ## 开发
 

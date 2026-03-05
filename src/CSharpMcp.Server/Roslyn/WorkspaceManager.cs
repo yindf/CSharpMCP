@@ -70,6 +70,21 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
 
             _logger.LogInformation("Loading workspace from: {Path}", path);
 
+            // 如果工作区已加载，先关闭当前工作区以便重新加载
+            if (_currentSolution != null)
+            {
+                _logger.LogInformation("Closing current workspace to reload");
+                StopFileWatcher();
+                _workspace.CloseSolution();
+                _currentSolution = null;
+                _loadedPath = null;
+                _userProjects = null;
+                lock (_deletedFilesLock)
+                {
+                    _deletedFilePaths.Clear();
+                }
+            }
+
             // First, check if it's a directory (search for .sln, .slnx, or .csproj)
             if (Directory.Exists(path))
             {
