@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
@@ -17,7 +17,7 @@ namespace CSharpMcp.Server.Tools.Essential;
 [McpServerToolType]
 public class FindReferencesTool
 {
-    [McpServerTool, Description("Find all references to a symbol across the workspace")]
+    [McpServerTool, Description("Find all references to a symbol across the workspace, grouped by project.")]
     public static async Task<string> FindReferences(
         [Description("The name of the symbol to find references for")] string symbolName,
         IWorkspaceManager workspaceManager,
@@ -25,9 +25,8 @@ public class FindReferencesTool
         CancellationToken cancellationToken,
         [Description("Path to the file containing the symbol")] string filePath = "",
         [Description("1-based line number near the symbol declaration")] int lineNumber = 0,
-        [Description("Whether to include source code context around each reference")] bool includeContext = true,
-        [Description("Number of lines to show before and after each reference")] int contextLines = 3,
-        [Description("Show only file names and reference counts, not detailed code context")] bool compact = false)
+        [Description("Maximum number of references to show per file")] int maxReferencesPerFile = 15,
+        [Description("Maximum number of files to show per project")] int maxFilesPerProject = 10)
     {
         try
         {
@@ -37,7 +36,6 @@ public class FindReferencesTool
                 return workspaceError;
             }
 
-            // 确保工作区是最新的（处理待处理的文件变更）
             await workspaceManager.EnsureUpToDateAsync(cancellationToken);
 
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
@@ -60,7 +58,7 @@ public class FindReferencesTool
 
             logger.LogInformation("Found {Count} references for {SymbolName}", referencedSymbols.Count, symbol.Name);
 
-            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, compact, cancellationToken);
+            return await BuildReferencesMarkdownAsync(symbol, referencedSymbols, maxReferencesPerFile, maxFilesPerProject, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -75,76 +73,132 @@ public class FindReferencesTool
             "Find References",
             message,
             "FindReferences(\n    filePath: \"path/to/File.cs\",\n    lineNumber: 42,  // Line near the symbol declaration\n    symbolName: \"MyMethod\"\n)",
-            "- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\", compact: true)`"
+            "- `FindReferences(filePath: \"C:/MyProject/MyClass.cs\", lineNumber: 15, symbolName: \"MyMethod\")`\n- `FindReferences(filePath: \"./Utils.cs\", lineNumber: 42, symbolName: \"Helper\")`"
         );
     }
 
     private static async Task<string> BuildReferencesMarkdownAsync(
         ISymbol symbol,
         IReadOnlyList<ReferencedSymbol> referencedSymbols,
-        bool compact,
+        int maxReferencesPerFile,
+        int maxFilesPerProject,
         CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
         var displayName = symbol.GetDisplayName();
 
-        sb.AppendLine($"## References: `{displayName}`");
+        sb.AppendLine($"# References: `{displayName}`");
         sb.AppendLine();
 
-        var groupedByFile = referencedSymbols
-            .SelectMany(rs => rs.Locations.Select(loc => new
-            {
-                ReferenceLocation = loc,
-                Definition = rs.Definition
-            }))
-            .GroupBy(r => r.ReferenceLocation.Document.FilePath);
+        // Collect all references with project info
+        var allRefs = new List<(ReferenceLocation Location, Document Document, string FilePath, Project Project)>();
 
-        long totalRefs = groupedByFile.Sum(g => g.Count());
-        var filesAffected = groupedByFile.Count();
-
-        // Summary at top
-        sb.AppendLine($"**Total**: {totalRefs} references in {filesAffected} file{(filesAffected != 1 ? "s" : "")}");
-        sb.AppendLine();
-
-        if (compact)
+        foreach (var rs in referencedSymbols)
         {
-            foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
+            foreach (var loc in rs.Locations)
             {
-                var fileName = System.IO.Path.GetFileName(fileGroup.Key);
-                var fullFilePath = fileGroup.Key;
-                var count = fileGroup.Count();
-                sb.AppendLine($"- `{fullFilePath}`: {count} reference{(count != 1 ? "s" : "")}");
+                var doc = loc.Document;
+                var project = doc.Project;
+                allRefs.Add((loc, doc, doc.FilePath ?? "", project));
             }
+        }
+
+        var totalRefs = allRefs.Count;
+        var totalFiles = allRefs.Select(r => r.FilePath).Distinct().Count();
+        var totalProjects = allRefs.Select(r => r.Project).Distinct().Count();
+
+        // Summary
+        sb.AppendLine("## Summary");
+        sb.AppendLine();
+        sb.AppendLine($"**{totalRefs}** references in **{totalFiles}** files across **{totalProjects}** project{(totalProjects != 1 ? "s" : "")}");
+        sb.AppendLine();
+
+        if (totalRefs == 0)
+        {
+            sb.AppendLine("No references found.");
             return sb.ToString();
         }
 
-        // Detailed view with line content
-        foreach (var fileGroup in groupedByFile.OrderBy(g => g.Key))
+        // Group by project
+        var byProject = allRefs
+            .GroupBy(r => r.Project)
+            .OrderByDescending(g => g.Count());
+
+        foreach (var projectGroup in byProject)
         {
-            var fullFilePath = fileGroup.Key;
-            var fileName = System.IO.Path.GetFileName(fullFilePath);
-            var refCount = fileGroup.Count();
+            var project = projectGroup.Key;
+            var projectRefs = projectGroup.Count();
+            var projectFiles = projectGroup.Select(r => r.FilePath).Distinct().Count();
 
-            sb.AppendLine($"### {fileName}");
-            sb.AppendLine($"`{fullFilePath}` ({refCount} reference{(refCount != 1 ? "s" : "")})");
+            sb.AppendLine($"## {project.Name}");
+            sb.AppendLine();
+            sb.AppendLine($"**{projectRefs}** references in **{projectFiles}** file{(projectFiles != 1 ? "s" : "")}");
             sb.AppendLine();
 
-            foreach (var refLoc in fileGroup.OrderBy(r => GetLineNumber(r.ReferenceLocation)))
+            // Group by file within project
+            var byFile = projectGroup
+                .GroupBy(r => r.FilePath)
+                .OrderByDescending(g => g.Count())
+                .Take(maxFilesPerProject);
+
+            foreach (var fileGroup in byFile)
             {
-                var location = refLoc.ReferenceLocation.Location;
-                var lineSpan = location.GetLineSpan();
-                var startLine = lineSpan.StartLinePosition.Line + 1;
-                var endLine = lineSpan.EndLinePosition.Line + 1;
+                var relativePath = GetRelativePath(fileGroup.Key);
+                var fileName = System.IO.Path.GetFileName(relativePath);
+                var fileRefs = fileGroup.Count();
 
-                var lineText = await MarkdownHelper.ExtractLineTextAsync(refLoc.ReferenceLocation.Document, startLine, cancellationToken);
+                sb.AppendLine($"### {fileName}");
+                sb.AppendLine($"`{relativePath}` ({fileRefs} reference{(fileRefs != 1 ? "s" : "")})");
+                sb.AppendLine();
 
-                var lineRange = endLine > startLine ? $"L{startLine}-L{endLine}" : $"L{startLine}";
-                sb.AppendLine($"- **{lineRange}**: `{lineText?.Trim() ?? ""}`");
+                var refsInFile = fileGroup
+                    .OrderBy(r => GetLineNumber(r.Location))
+                    .Take(maxReferencesPerFile);
+
+                foreach (var refLoc in refsInFile)
+                {
+                    var location = refLoc.Location.Location;
+                    var lineSpan = location.GetLineSpan();
+                    var startLine = lineSpan.StartLinePosition.Line + 1;
+                    var endLine = lineSpan.EndLinePosition.Line + 1;
+
+                    var lineText = await MarkdownHelper.ExtractLineTextAsync(refLoc.Document, startLine, cancellationToken);
+
+                    var lineRange = endLine > startLine ? $"L{startLine}-L{endLine}" : $"L{startLine}";
+                    sb.AppendLine($"- **{lineRange}**: `{lineText?.Trim() ?? ""}`");
+                }
+
+                if (fileGroup.Count() > maxReferencesPerFile)
+                {
+                    sb.AppendLine($"- _... and {fileGroup.Count() - maxReferencesPerFile} more references_");
+                }
+
+                sb.AppendLine();
             }
-            sb.AppendLine();
+
+            var totalFilesInProject = projectGroup.Select(r => r.FilePath).Distinct().Count();
+            if (totalFilesInProject > maxFilesPerProject)
+            {
+                sb.AppendLine($"_... and {totalFilesInProject - maxFilesPerProject} more files in this project_");
+                sb.AppendLine();
+            }
         }
 
         return sb.ToString();
+    }
+
+    private static string GetRelativePath(string absolutePath)
+    {
+        try
+        {
+            var currentDir = System.IO.Directory.GetCurrentDirectory();
+            var relativePath = System.IO.Path.GetRelativePath(currentDir, absolutePath);
+            return string.IsNullOrEmpty(relativePath) ? absolutePath.Replace('\\', '/') : relativePath.Replace('\\', '/');
+        }
+        catch
+        {
+            return absolutePath.Replace('\\', '/');
+        }
     }
 
     private static int GetLineNumber(ReferenceLocation location)

@@ -40,6 +40,81 @@ public static class SymbolResolver
     }
 
     /// <summary>
+    /// Resolve a single symbol from file location info with fuzzy matching and SymbolKind filtering
+    /// </summary>
+    public static async Task<ISymbol?> ResolveSymbolAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter,
+        SymbolKind? symbolKind,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
+
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
+        }
+
+        // Filter by SymbolKind if specified
+        if (symbolKind.HasValue)
+        {
+            symbols = FilterBySymbolKind(symbols, symbolKind.Value);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.FirstOrDefault();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Resolve all matching symbols and return them ordered by proximity.
+    /// Used for disambiguation when multiple symbols match the same name.
+    /// </summary>
+    public static async Task<IReadOnlyList<ISymbol>> ResolveAllSymbolsAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        SymbolFilter filter,
+        SymbolKind? symbolKind,
+        CancellationToken cancellationToken)
+    {
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
+
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
+        }
+
+        // Filter by SymbolKind if specified
+        if (symbolKind.HasValue)
+        {
+            symbols = FilterBySymbolKind(symbols, symbolKind.Value);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.ToList();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber).ToList();
+    }
+
+    /// <summary>
+    /// Filter symbols by SymbolKind, handling common mappings
+    /// </summary>
+    private static IEnumerable<ISymbol> FilterBySymbolKind(IEnumerable<ISymbol> symbols, SymbolKind kind)
+    {
+        return symbols.Where(s => s.Kind == kind);
+    }
+
+    /// <summary>
     /// Resolve multiple symbols from file location info with fuzzy matching
     /// </summary>
     public static async Task<IEnumerable<ISymbol>> ResolveSymbolsAsync(

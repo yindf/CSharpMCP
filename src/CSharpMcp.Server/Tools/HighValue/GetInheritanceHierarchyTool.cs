@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
@@ -14,7 +15,7 @@ namespace CSharpMcp.Server.Tools.HighValue;
 [McpServerToolType]
 public class GetInheritanceHierarchyTool
 {
-    [McpServerTool, Description("Get the complete inheritance hierarchy for a type including base types, interfaces, and derived types")]
+    [McpServerTool, Description("Get the complete inheritance hierarchy for a type including base types, interfaces, and derived types. Shows interface implementation status.")]
     public static async Task<string> GetInheritanceHierarchy(
         [Description("The name of the type to analyze")] string symbolName,
         IWorkspaceManager workspaceManager,
@@ -24,7 +25,8 @@ public class GetInheritanceHierarchyTool
         [Description("Path to the file containing the type")] string filePath = "",
         [Description("1-based line number near the type declaration")] int lineNumber = 0,
         [Description("Whether to include derived types in the hierarchy")] bool includeDerivedTypes = true,
-        [Description("Maximum depth for derived type search (0 = unlimited, default 3)")] int maxDepth = 3)
+        [Description("Maximum depth for derived type search (0 = unlimited, default 3)")] int maxDepth = 3,
+        [Description("Show interface member implementation status")] bool showImplementationStatus = true)
     {
         try
         {
@@ -34,7 +36,6 @@ public class GetInheritanceHierarchyTool
                 return workspaceError;
             }
 
-            // 确保工作区是最新的（处理待处理的文件变更）
             await workspaceManager.EnsureUpToDateAsync(cancellationToken);
 
             logger.LogInformation("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
@@ -69,7 +70,7 @@ public class GetInheritanceHierarchyTool
 
             logger.LogInformation("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
 
-            return BuildHierarchyMarkdown(type, tree, includeDerivedTypes);
+            return BuildHierarchyMarkdown(type, tree, includeDerivedTypes, showImplementationStatus);
         }
         catch (Exception ex)
         {
@@ -91,25 +92,27 @@ public class GetInheritanceHierarchyTool
     private static string BuildHierarchyMarkdown(
         INamedTypeSymbol type,
         InheritanceTree tree,
-        bool includeDerivedTypes)
+        bool includeDerivedTypes,
+        bool showImplementationStatus)
     {
         var sb = new StringBuilder();
         var typeName = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
 
-        sb.AppendLine($"## Inheritance Hierarchy: `{typeName}`");
+        sb.AppendLine($"# Inheritance Hierarchy: `{typeName}`");
         sb.AppendLine();
 
         var kind = type.GetNamedTypeKindDisplay();
-        sb.AppendLine($"**Kind**: {kind}");
+        var (startLine, _) = type.GetLineRange();
+        sb.AppendLine($"**Kind**: {kind} | {MarkdownHelper.FormatFileLocation(type.GetFilePath(), startLine)}");
         sb.AppendLine();
 
         if (tree.BaseTypes.Count > 0)
         {
-            sb.AppendLine($"### Base Types ({tree.BaseTypes.Count})");
+            sb.AppendLine($"## Base Types ({tree.BaseTypes.Count})");
             sb.AppendLine();
             foreach (var baseType in tree.BaseTypes)
             {
-                sb.AppendLine($"- **{baseType.ToDisplayString()}**");
+                sb.AppendLine($"- **`{baseType.ToDisplayString()}`**");
                 MarkdownHelper.AppendLocationIfExists(sb, baseType);
             }
             sb.AppendLine();
@@ -117,24 +120,54 @@ public class GetInheritanceHierarchyTool
 
         if (tree.Interfaces.Count > 0)
         {
-            sb.AppendLine($"### Interfaces ({tree.Interfaces.Count})");
+            sb.AppendLine($"## Interfaces ({tree.Interfaces.Count})");
             sb.AppendLine();
+
             foreach (var iface in tree.Interfaces)
             {
-                sb.AppendLine($"- **{iface.ToDisplayString()}**");
-                MarkdownHelper.AppendLocationIfExists(sb, iface);
+                var ifaceStartLine = iface.GetLineRange().startLine;
+                sb.AppendLine($"### `{iface.ToDisplayString()}`");
+                sb.AppendLine($"Location: {MarkdownHelper.FormatFileLocation(iface.GetFilePath(), ifaceStartLine)}");
+                sb.AppendLine();
+
+                if (showImplementationStatus && type.TypeKind != TypeKind.Interface)
+                {
+                    sb.AppendLine("**Members:**");
+                    sb.AppendLine();
+
+                    var interfaceMembers = iface.GetMembers()
+                        .Where(m => m.Kind == SymbolKind.Method || m.Kind == SymbolKind.Property || m.Kind == SymbolKind.Event)
+                        .ToList();
+
+                    if (interfaceMembers.Count == 0)
+                    {
+                        sb.AppendLine("_No members_");
+                    }
+                    else
+                    {
+                        foreach (var member in interfaceMembers)
+                        {
+                            var isImplemented = IsInterfaceMemberImplemented(type, iface, member);
+                            var status = isImplemented ? "✓" : "✗";
+                            var memberKind = member.Kind.ToString().ToLowerInvariant();
+
+                            sb.AppendLine($"- {status} `{member.Name}` ({memberKind})");
+                        }
+                    }
+
+                    sb.AppendLine();
+                }
             }
-            sb.AppendLine();
         }
 
         if (includeDerivedTypes && tree.DerivedTypes.Count > 0)
         {
-            sb.AppendLine($"### Derived Types ({tree.DerivedTypes.Count}, depth: {tree.Depth})");
+            sb.AppendLine($"## Derived Types ({tree.DerivedTypes.Count}, depth: {tree.Depth})");
             sb.AppendLine();
             foreach (var derived in tree.DerivedTypes)
             {
-                sb.AppendLine($"- **{derived.ToDisplayString()}**");
-                MarkdownHelper.AppendLocationIfExists(sb, derived);
+                var derivedStartLine = derived.GetLineRange().startLine;
+                sb.AppendLine($"- **`{derived.ToDisplayString()}`** | {MarkdownHelper.FormatFileLocation(derived.GetFilePath(), derivedStartLine)}");
             }
             sb.AppendLine();
         }
@@ -142,4 +175,18 @@ public class GetInheritanceHierarchyTool
         return sb.ToString();
     }
 
+    private static bool IsInterfaceMemberImplemented(INamedTypeSymbol type, INamedTypeSymbol iface, ISymbol member)
+    {
+        // Check for matching member by name and kind
+        foreach (var typeMember in type.GetMembers())
+        {
+            if (typeMember.Kind != member.Kind) continue;
+            if (typeMember.Name != member.Name) continue;
+
+            // Found a matching member - assume it implements the interface
+            return true;
+        }
+
+        return false;
+    }
 }

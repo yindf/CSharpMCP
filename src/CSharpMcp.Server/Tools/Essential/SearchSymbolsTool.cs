@@ -22,7 +22,8 @@ public class SearchSymbolsTool
         ILogger<SearchSymbolsTool> logger,
         CancellationToken cancellationToken,
         [Description("Maximum number of results to return")] int maxResults = 100,
-        [Description("Sort order: relevance (type>field, exact>wildcard), name, or kind")] string sortBy = "relevance")
+        [Description("Sort order: relevance (type>field, exact>wildcard), name, or kind")] string sortBy = "relevance",
+        [Description("Filter by symbol kind: NamedType (class/interface/struct/enum), Method, Property, Field, Event")] string symbolKind = "")
     {
         try
         {
@@ -52,6 +53,14 @@ public class SearchSymbolsTool
             {
                 symbols = await workspaceManager.SearchSymbolsWithPatternAsync(query,
                     SymbolFilter.TypeAndMember, cancellationToken);
+            }
+
+            // Filter by symbol kind if specified
+            var kindFilter = ParseSymbolKind(symbolKind);
+            if (kindFilter.HasValue)
+            {
+                symbols = symbols.Where(s => s.Kind == kindFilter.Value);
+                logger.LogInformation("Filtering by symbol kind: {Kind}", kindFilter.Value);
             }
 
             foreach (var symbol in symbols.Take(maxResults))
@@ -234,5 +243,18 @@ public class SearchSymbolsTool
         sb.AppendLine();
 
         return sb.ToString();
+    }
+
+    private static SymbolKind? ParseSymbolKind(string? symbolKind)
+    {
+        return symbolKind?.ToLowerInvariant() switch
+        {
+            "namedtype" or "class" or "interface" or "struct" or "enum" or "delegate" => SymbolKind.NamedType,
+            "method" => SymbolKind.Method,
+            "property" => SymbolKind.Property,
+            "field" => SymbolKind.Field,
+            "event" => SymbolKind.Event,
+            _ => null
+        };
     }
 }

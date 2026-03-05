@@ -17,7 +17,7 @@ namespace CSharpMcp.Server.Tools.Optimization;
 [McpServerToolType]
 public class GetSymbolInfoTool
 {
-    [McpServerTool, Description("Get complete symbol information for LLM analysis. Returns signature, documentation, source code, type members, references summary, inheritance, and call graph in a single call.")]
+    [McpServerTool, Description("Get complete symbol information for LLM analysis. Returns signature, documentation, source code, type members, references summary, inheritance, and call graph in a single call. If multiple symbols match, returns disambiguation list.")]
     public static async Task<string> GetSymbolInfo(
         [Description("The name of the symbol to analyze")] string symbolName,
         IWorkspaceManager workspaceManager,
@@ -26,6 +26,7 @@ public class GetSymbolInfoTool
         CancellationToken cancellationToken,
         [Description("Path to the file containing the symbol")] string filePath = "",
         [Description("1-based line number near the symbol declaration")] int lineNumber = 0,
+        [Description("Filter by symbol kind: NamedType (class/interface/struct/enum), Method, Property, Field, Event")] string symbolKind = "",
         [Description("Maximum lines of source code to include (0 = no limit)")] int maxBodyLines = 100,
         [Description("Maximum number of references to show with context")] int maxReferences = 10,
         [Description("Maximum number of callers/callees in call graph")] int maxCallGraph = 10,
@@ -44,11 +45,40 @@ public class GetSymbolInfoTool
             logger.LogInformation("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbol = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.TypeAndMember, cancellationToken);
-            if (symbol == null)
+            // Parse symbolKind parameter
+            SymbolKind? parsedKind = ParseSymbolKind(symbolKind);
+
+            // Get all matching symbols for disambiguation
+            var allSymbols = await SymbolResolver.ResolveAllSymbolsAsync(
+                filePath, lineNumber, symbolName ?? "", workspaceManager,
+                SymbolFilter.TypeAndMember, parsedKind, cancellationToken);
+
+            if (allSymbols.Count == 0)
             {
                 logger.LogWarning("Symbol not found: {SymbolName}", symbolName ?? "at specified location");
                 return GetErrorHelpResponse($"Symbol not found: `{symbolName ?? "at specified location"}`");
+            }
+
+            // If multiple symbols found, check if we can auto-select based on kind preference
+            ISymbol? symbol;
+            if (allSymbols.Count > 1 && !parsedKind.HasValue)
+            {
+                // Prefer types (classes, interfaces) over members (fields, methods)
+                symbol = allSymbols.FirstOrDefault(s => s is INamedTypeSymbol)
+                      ?? allSymbols.FirstOrDefault(s => s is IMethodSymbol or IPropertySymbol)
+                      ?? allSymbols.First();
+
+                // If we had to make a choice, show disambiguation info
+                // Use SymbolEqualityComparer for proper symbol comparison
+                if (!SymbolEqualityComparer.Default.Equals(symbol, allSymbols.First()) || allSymbols.Count(s => s.Kind == symbol.Kind) > 1)
+                {
+                    logger.LogInformation("Multiple symbols found for {SymbolName}, showing disambiguation", symbolName);
+                    return BuildDisambiguationResponse(symbolName, allSymbols);
+                }
+            }
+            else
+            {
+                symbol = allSymbols.First();
             }
 
             var result = await BuildCompleteMarkdownAsync(
@@ -71,6 +101,73 @@ public class GetSymbolInfoTool
             logger.LogError(ex, "Error executing GetSymbolInfoTool");
             return GetErrorHelpResponse($"Failed to get complete symbol information: {ex.Message}");
         }
+    }
+
+    private static SymbolKind? ParseSymbolKind(string? symbolKind)
+    {
+        if (string.IsNullOrEmpty(symbolKind))
+            return null;
+
+        return symbolKind.ToLowerInvariant() switch
+        {
+            "namedtype" or "class" or "interface" or "struct" or "enum" or "delegate" => SymbolKind.NamedType,
+            "method" => SymbolKind.Method,
+            "property" => SymbolKind.Property,
+            "field" => SymbolKind.Field,
+            "event" => SymbolKind.Event,
+            _ => null
+        };
+    }
+
+    private static string BuildDisambiguationResponse(string symbolName, IReadOnlyList<ISymbol> symbols)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"# Multiple Symbols Found for `{symbolName}`");
+        sb.AppendLine();
+        sb.AppendLine($"Found {symbols.Count} symbols matching this name. Please specify which one:");
+        sb.AppendLine();
+
+        // Group by kind
+        var byKind = symbols.GroupBy(s => s.Kind).OrderByDescending(g => g.Count());
+
+        foreach (var group in byKind)
+        {
+            sb.AppendLine($"## {group.Key}s ({group.Count()})");
+            sb.AppendLine();
+
+            foreach (var sym in group.Take(10))
+            {
+                var (startLine, _) = sym.GetLineRange();
+                var filePath = sym.GetFilePath();
+                var kind = sym.GetDisplayKind();
+                var containingType = sym.GetContainingTypeName();
+
+                sb.AppendLine($"- `{sym.Name}` | **{kind}** | {MarkdownHelper.FormatFileLocation(filePath, startLine)}");
+                if (!string.IsNullOrEmpty(containingType))
+                    sb.AppendLine($"  - Containing type: `{containingType}`");
+            }
+
+            if (group.Count() > 10)
+                sb.AppendLine($"- ... ({group.Count() - 10} more)");
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("## How to Disambiguate");
+        sb.AppendLine();
+        sb.AppendLine("Use one of these approaches:");
+        sb.AppendLine();
+        sb.AppendLine("1. **Specify symbol kind**:");
+        sb.AppendLine($"   - `GetSymbolInfo(symbolName: \"{symbolName}\", symbolKind: \"NamedType\")` - for classes/interfaces");
+        sb.AppendLine($"   - `GetSymbolInfo(symbolName: \"{symbolName}\", symbolKind: \"Method\")` - for methods");
+        sb.AppendLine($"   - `GetSymbolInfo(symbolName: \"{symbolName}\", symbolKind: \"Field\")` - for fields");
+        sb.AppendLine($"   - `GetSymbolInfo(symbolName: \"{symbolName}\", symbolKind: \"Property\")` - for properties");
+        sb.AppendLine();
+        sb.AppendLine("2. **Specify file and line number**:");
+        sb.AppendLine($"   - `GetSymbolInfo(symbolName: \"{symbolName}\", filePath: \"path/to/File.cs\", lineNumber: 42)`");
+        sb.AppendLine();
+
+        return sb.ToString();
     }
 
     private static string GetErrorHelpResponse(string message)
