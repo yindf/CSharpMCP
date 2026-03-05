@@ -90,4 +90,9 @@ public interface IWorkspaceManager
     /// 获取所有已删除的文件路径
     /// </summary>
     IReadOnlySet<string> GetDeletedFilePaths();
+
+    /// <summary>
+    /// 强制重新编译整个工作区，用于获取最新的诊断信息
+    /// </summary>
+    Task ForceRecompileAsync(CancellationToken cancellationToken);
 }

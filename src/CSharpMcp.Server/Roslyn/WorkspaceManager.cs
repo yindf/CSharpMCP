@@ -527,6 +527,40 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     }
 
     /// <summary>
+    /// 强制重新编译整个工作区，用于获取最新的诊断信息
+    /// </summary>
+    public async Task ForceRecompileAsync(CancellationToken cancellationToken)
+    {
+        if (_currentSolution == null)
+        {
+            return;
+        }
+
+        _logger.LogInformation("Force recompiling workspace for fresh diagnostics...");
+
+        try
+        {
+            // 通过重新加载解决方案来强制重新编译
+            var originalPath = _loadedPath;
+            if (!string.IsNullOrEmpty(originalPath))
+            {
+                // 保存当前加载的路径
+                _loadedPath = null;
+                _currentSolution = null;
+
+                // 重新加载
+                await LoadAsync(originalPath, cancellationToken);
+
+                _logger.LogInformation("Force recompile completed");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to force recompile");
+        }
+    }
+
+    /// <summary>
     /// 标记文件为已删除
     /// </summary>
     internal void MarkFileAsDeleted(string filePath)
