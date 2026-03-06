@@ -35,7 +35,7 @@ public class GetImplementationsTool
                 return workspaceError;
             }
 
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Finding implementations: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);

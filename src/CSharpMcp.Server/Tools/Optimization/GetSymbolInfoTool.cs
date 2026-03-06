@@ -40,7 +40,7 @@ public class GetSymbolInfoTool
                 return workspaceError;
             }
 
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Getting complete symbol info: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);

@@ -36,7 +36,7 @@ public class GetInheritanceHierarchyTool
                 return workspaceError;
             }
 
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);

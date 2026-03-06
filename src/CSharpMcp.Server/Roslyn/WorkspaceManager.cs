@@ -505,6 +505,60 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     }
 
     /// <summary>
+    /// 检查工作区是否需要重新加载（当 sln/csproj 变更或文件删除/添加时）
+    /// </summary>
+    public bool NeedsWorkspaceReload => _fileWatcher?.NeedsWorkspaceReload ?? false;
+
+    /// <summary>
+    /// 是否需要 Unity 刷新（当 Unity 项目的 cs 文件增删时）
+    /// </summary>
+    public bool NeedsUnityRefresh => _fileWatcher?.NeedsUnityRefresh ?? false;
+
+    /// <summary>
+    /// 获取 Unity 刷新提示信息（用于显示给大模型）
+    /// </summary>
+    public string? GetUnityRefreshHint()
+    {
+        if (!_isUnityProject || _fileWatcher?.NeedsUnityRefresh != true)
+        {
+            return null;
+        }
+
+        return "> **Unity Project:** .cs files have been added or deleted. Please switch to Unity Editor to refresh project files, then the diagnostics will be accurate.";
+    }
+
+    /// <summary>
+    /// 确保工作区是新鲜的（如果需要会重新加载整个工作区）
+    /// 在需要最新编译状态的工具调用前使用
+    /// </summary>
+    public async Task EnsureRefreshAsync(CancellationToken cancellationToken = default)
+    {
+        // 先刷新待处理的文件变更
+        if (_fileWatcher?.HasPendingChanges == true)
+        {
+            _logger.LogInformation("Flushing pending file changes");
+            await _fileWatcher.FlushPendingChangesAsync(cancellationToken);
+        }
+
+        // 检查是否需要重新加载工作区
+        if (_fileWatcher?.NeedsWorkspaceReload == true)
+        {
+            _logger.LogInformation("Workspace needs reload, reloading...");
+            await ForceRecompileAsync(cancellationToken);
+            _fileWatcher.ClearNeedsReload();
+            _logger.LogInformation("Workspace reloaded");
+        }
+    }
+
+    /// <summary>
+    /// 清除 Unity 刷新提示（在提示显示后调用）
+    /// </summary>
+    public void ClearUnityRefreshHint()
+    {
+        _fileWatcher?.ClearUnityRefresh();
+    }
+
+    /// <summary>
     /// 检查文件是否已被删除（物理文件不存在，但仍在 Workspace 中）
     /// </summary>
     public bool IsFileDeleted(string filePath)

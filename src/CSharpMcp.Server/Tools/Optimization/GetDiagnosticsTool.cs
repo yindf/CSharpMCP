@@ -35,8 +35,8 @@ public class GetDiagnosticsTool
                 return workspaceError;
             }
 
-            // 确保工作区是最新的（处理待处理的文件变更）
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            // 确保工作区对诊断是最新的（如果需要会重新加载整个工作区）
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Getting diagnostics for: {FilePath}", filePath ?? "entire workspace");
 
@@ -65,8 +65,8 @@ public class GetDiagnosticsTool
                     return GetErrorHelpResponse($"File not found: `{filePath}`\n\nMake sure the file path is correct and the workspace is loaded.");
                 }
 
-                var result = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
-                diagnostics.AddRange(result);
+                var documentDiagnostics = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
+                diagnostics.AddRange(documentDiagnostics);
             }
             else
             {
@@ -89,8 +89,8 @@ public class GetDiagnosticsTool
                             continue;
                         }
 
-                        var result = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
-                        diagnostics.AddRange(result);
+                        var docDiagnostics = await ProcessDocumentAsync(document, includeWarnings, includeInfo, includeHidden, filesWithDiagnostics, logger, cancellationToken);
+                        diagnostics.AddRange(docDiagnostics);
                     }
                 }
             }
@@ -111,7 +111,17 @@ public class GetDiagnosticsTool
             logger.LogInformation("Retrieved {Count} diagnostics: {Errors} errors, {Warnings} warnings",
                 diagnostics.Count, totalErrors, totalWarnings);
 
-            return new GetDiagnosticsResponse(summary, diagnostics).ToMarkdown();
+            var result = new GetDiagnosticsResponse(summary, diagnostics).ToMarkdown();
+
+            // 检查是否需要显示 Unity 刷新提示
+            var unityHint = workspaceManager.GetUnityRefreshHint();
+            if (!string.IsNullOrEmpty(unityHint))
+            {
+                result = unityHint + "\n\n---\n\n" + result;
+                workspaceManager.ClearUnityRefreshHint();
+            }
+
+            return result;
         }
         catch (Exception ex)
         {

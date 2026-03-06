@@ -44,6 +44,26 @@ public interface IWorkspaceManager
     Task EnsureUpToDateAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 检查工作区是否需要重新加载（当 sln/csproj 变更或文件删除/添加时）
+    /// </summary>
+    bool NeedsWorkspaceReload { get; }
+
+    /// <summary>
+    /// 是否需要 Unity 刷新（当 Unity 项目的 cs 文件增删时）
+    /// </summary>
+    bool NeedsUnityRefresh { get; }
+
+    /// <summary>
+    /// 获取 Unity 刷新提示信息（用于显示给大模型），如果没有则返回 null
+    /// </summary>
+    string? GetUnityRefreshHint();
+
+    /// <summary>
+    /// 清除 Unity 刷新提示（在提示显示后调用）
+    /// </summary>
+    void ClearUnityRefreshHint();
+
+    /// <summary>
     /// 获取文档
     /// </summary>
     Task<Document?> GetDocumentAsync(string filePath, CancellationToken cancellationToken = default);
@@ -95,4 +115,10 @@ public interface IWorkspaceManager
     /// 强制重新编译整个工作区，用于获取最新的诊断信息
     /// </summary>
     Task ForceRecompileAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 确保工作区状态足够新鲜以进行诊断
+    /// 组合了 EnsureUpToDateAsync 和 ForceRecompileAsync 的功能
+    /// </summary>
+    Task EnsureRefreshAsync(CancellationToken cancellationToken = default);
 }

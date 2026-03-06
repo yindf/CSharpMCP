@@ -39,8 +39,8 @@ public class RenameSymbolTool
                 return GetErrorHelpResponse("New name cannot be empty.");
             }
 
-            // 确保工作区是最新的
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            // 确保工作区是最新的（如果需要会重新加载整个工作区）
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Renaming symbol: {FilePath}:{LineNumber} - {SymbolName} -> {NewName}",
                 filePath, lineNumber, symbolName, newName);

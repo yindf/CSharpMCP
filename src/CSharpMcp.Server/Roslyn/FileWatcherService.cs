@@ -32,6 +32,15 @@ internal sealed class FileWatcherService : IDisposable
     private TaskCompletionSource? _processingTcs;
     private readonly object _processingTcsLock = new();
 
+    // 需要重新加载工作区的标记（当 sln/csproj 变更或文件删除/添加时）
+    private volatile bool _needsWorkspaceReload;
+    private readonly object _needsReloadLock = new();
+
+    // Unity 项目需要刷新的标记（当 Unity 项目的 cs 文件增删时）
+    private volatile bool _needsUnityRefresh;
+    private readonly List<string> _unityRefreshReasons = new();
+    private readonly object _unityRefreshLock = new();
+
     // MD5 过滤机制相关字段
     private readonly Dictionary<string, string> _applyingSnapshots = new();  // filePath -> MD5
     private readonly List<(string filePath, FileChangeType changeType)> _deferredChanges = new();
@@ -167,6 +176,80 @@ internal sealed class FileWatcherService : IDisposable
     /// 是否有待处理的文件变更
     /// </summary>
     public bool HasPendingChanges => _hasPendingChanges;
+
+    /// <summary>
+    /// 是否需要重新加载整个工作区（当 sln/csproj 变更或文件删除/添加时）
+    /// </summary>
+    public bool NeedsWorkspaceReload => _needsWorkspaceReload;
+
+    /// <summary>
+    /// 标记需要重新加载工作区
+    /// </summary>
+    internal void MarkNeedsReload()
+    {
+        lock (_needsReloadLock)
+        {
+            _needsWorkspaceReload = true;
+            _logger.LogInformation("Workspace reload marked as needed");
+        }
+    }
+
+    /// <summary>
+    /// 清除重新加载标记（在重新加载完成后调用）
+    /// </summary>
+    internal void ClearNeedsReload()
+    {
+        lock (_needsReloadLock)
+        {
+            _needsWorkspaceReload = false;
+            _logger.LogDebug("Workspace reload flag cleared");
+        }
+    }
+
+    /// <summary>
+    /// 是否需要 Unity 刷新（当 Unity 项目的 cs 文件增删时）
+    /// </summary>
+    public bool NeedsUnityRefresh => _needsUnityRefresh;
+
+    /// <summary>
+    /// 获取 Unity 刷新原因列表
+    /// </summary>
+    public IReadOnlyList<string> GetUnityRefreshReasons()
+    {
+        lock (_unityRefreshLock)
+        {
+            return _unityRefreshReasons.ToList();
+        }
+    }
+
+    /// <summary>
+    /// 标记需要 Unity 刷新
+    /// </summary>
+    internal void MarkNeedsUnityRefresh(string reason)
+    {
+        lock (_unityRefreshLock)
+        {
+            _needsUnityRefresh = true;
+            if (!_unityRefreshReasons.Contains(reason))
+            {
+                _unityRefreshReasons.Add(reason);
+            }
+            _logger.LogInformation("Unity refresh marked as needed: {Reason}", reason);
+        }
+    }
+
+    /// <summary>
+    /// 清除 Unity 刷新标记
+    /// </summary>
+    internal void ClearUnityRefresh()
+    {
+        lock (_unityRefreshLock)
+        {
+            _needsUnityRefresh = false;
+            _unityRefreshReasons.Clear();
+            _logger.LogDebug("Unity refresh flag cleared");
+        }
+    }
 
     /// <summary>
     /// 立即处理待处理的文件变更，并等待编译完成

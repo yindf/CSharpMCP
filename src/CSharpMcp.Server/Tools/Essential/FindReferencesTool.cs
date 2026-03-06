@@ -36,7 +36,7 @@ public class FindReferencesTool
                 return workspaceError;
             }
 
-            await workspaceManager.EnsureUpToDateAsync(cancellationToken);
+            await workspaceManager.EnsureRefreshAsync(cancellationToken);
 
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);

@@ -8,9 +8,22 @@ CSharp MCP Server is a Roslyn-based Model Context Protocol (MCP) server that pro
 
 ## Build and Test Commands
 
+### Project Structure
+- **Main Project**: `src/CSharpMcp.Server/CSharpMcp.Server.csproj`
+- **Test Projects**: `tests/CSharpMcp.Tests/`, `tests/CSharpMcp.IntegrationTests/`
+
 ### Building
 ```bash
-dotnet build
+# Build the main project - ALWAYS use this format to limit output
+dotnet build src/CSharpMcp.Server/CSharpMcp.Server.csproj 2>&1 | Select-Object -Last 20
+```
+
+**IMPORTANT**: Always limit build output to last 20 lines to avoid excessive context usage.
+
+### Setting Workspace (for MCP tools)
+Before using C# analysis tools, load the workspace:
+```
+LoadWorkspace(path: "src/CSharpMcp.Server/CSharpMcp.Server.csproj")
 ```
 
 ### Running tests

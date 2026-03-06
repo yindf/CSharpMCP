@@ -147,46 +147,17 @@ internal sealed partial class WorkspaceManager
             if (solutionFiles.Count > 0)
             {
                 _logger.LogInformation("Reloading solution due to {Count} solution file change(s)", solutionFiles.Count);
-                var solutionPath = solutionFiles[0];
-                var solution = await _workspace.OpenSolutionAsync(solutionPath, progress: null, cancellationToken);
-                _userProjects = null; // Reset cached user projects
-                return solution;
+                _fileWatcher?.MarkNeedsReload();
+                return null; // Return null to signal that workspace needs full reload
             }
 
             // Priority 2: Project file changed - reload entire solution
             // Note: MSBuildWorkspace does not support removing projects, so we must reload the whole solution
             if (projectFiles.Count > 0)
             {
-                _logger.LogInformation("Project file(s) changed, reloading entire solution");
-
-                if (!string.IsNullOrEmpty(_loadedPath))
-                {
-                    var extension = Path.GetExtension(_loadedPath).ToLowerInvariant();
-                    try
-                    {
-                        if (extension == ".sln" || extension == ".slnx")
-                        {
-                            var solution = await _workspace.OpenSolutionAsync(_loadedPath, progress: null, cancellationToken);
-                            _userProjects = null;
-                            _logger.LogInformation("Solution reloaded successfully");
-                            return solution;
-                        }
-                        else if (extension == ".csproj")
-                        {
-                            // Single project mode - reload the project
-                            var project = await _workspace.OpenProjectAsync(_loadedPath, progress: null, cancellationToken);
-                            _userProjects = null;
-                            _logger.LogInformation("Project reloaded successfully");
-                            return project.Solution;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Failed to reload workspace from: {Path}", _loadedPath);
-                    }
-                }
-
-                return null;
+                _logger.LogInformation("Project file(s) changed, marking workspace for reload");
+                _fileWatcher?.MarkNeedsReload();
+                return null; // Return null to signal that workspace needs full reload
             }
 
             // Priority 3: Source files changed
@@ -238,14 +209,24 @@ internal sealed partial class WorkspaceManager
                     }
                 }
 
-                // Handle deleted files - mark them as deleted instead of immediate reload
+                // Handle deleted files - mark them as deleted and flag for reload
                 if (deletedFiles.Count > 0)
                 {
-                    _logger.LogInformation("{Count} file(s) deleted, marking as deleted", deletedFiles.Count);
+                    _logger.LogInformation("{Count} file(s) deleted, marking as deleted and flagging for reload", deletedFiles.Count);
 
                     foreach (var (documentId, filePath) in deletedFiles)
                     {
                         MarkFileAsDeleted(filePath);
+                    }
+
+                    // Mark that workspace needs reload for accurate diagnostics
+                    _fileWatcher?.MarkNeedsReload();
+
+                    // For Unity projects, mark that Unity refresh is needed
+                    if (_isUnityProject)
+                    {
+                        var deletedFileNames = deletedFiles.Select(f => Path.GetFileName(f.filePath)).ToList();
+                        _fileWatcher?.MarkNeedsUnityRefresh($"{deletedFiles.Count} .cs file(s) deleted: {string.Join(", ", deletedFileNames)}");
                     }
 
                     // Continue processing other file changes (modified/new files)
@@ -264,13 +245,27 @@ internal sealed partial class WorkspaceManager
                     }
 
                     // Add new documents
-                    foreach (var (projectId, filePath, sourceText) in newDocuments)
+                    if (newDocuments.Count > 0)
                     {
-                        var project = solution.GetProject(projectId)!;
-                        var documentName = Path.GetFileName(filePath);
-                        var folders = GetFoldersForFile(filePath, project);
-                        var newDocument = project.AddDocument(documentName, sourceText, folders, filePath);
-                        solution = newDocument.Project.Solution;
+                        foreach (var (projectId, filePath, sourceText) in newDocuments)
+                        {
+                            var project = solution.GetProject(projectId)!;
+                            var documentName = Path.GetFileName(filePath);
+                            var folders = GetFoldersForFile(filePath, project);
+                            var newDocument = project.AddDocument(documentName, sourceText, folders, filePath);
+                            solution = newDocument.Project.Solution;
+                        }
+
+                        // Mark that workspace needs reload for accurate diagnostics when new files are added
+                        _fileWatcher?.MarkNeedsReload();
+                        _logger.LogInformation("New files added, marking workspace for reload");
+
+                        // For Unity projects, mark that Unity refresh is needed
+                        if (_isUnityProject)
+                        {
+                            var newFileNames = newDocuments.Select(f => Path.GetFileName(f.filePath)).ToList();
+                            _fileWatcher?.MarkNeedsUnityRefresh($"{newDocuments.Count} .cs file(s) added: {string.Join(", ", newFileNames)}");
+                        }
                     }
 
                     _logger.LogInformation("Updated {UpdateCount} document(s), added {NewCount} new document(s)",
