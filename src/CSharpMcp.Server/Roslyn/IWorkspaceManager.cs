@@ -118,7 +118,8 @@ public interface IWorkspaceManager
 
     /// <summary>
     /// 确保工作区状态足够新鲜以进行诊断
-    /// 组合了 EnsureUpToDateAsync 和 ForceRecompileAsync 的功能
+    /// 如果有待处理的文件变更，会先处理变更，然后强制重新编译整个工作区
+    /// 这确保返回的诊断信息是基于完整编译的结果，而不是增量更新
     /// </summary>
     Task EnsureRefreshAsync(CancellationToken cancellationToken = default);
 }

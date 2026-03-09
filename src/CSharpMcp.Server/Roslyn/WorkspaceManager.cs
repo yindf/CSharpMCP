@@ -533,20 +533,24 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// </summary>
     public async Task EnsureRefreshAsync(CancellationToken cancellationToken = default)
     {
+        var hadPendingChanges = false;
+
         // 先刷新待处理的文件变更
         if (_fileWatcher?.HasPendingChanges == true)
         {
             _logger.LogInformation("Flushing pending file changes");
             await _fileWatcher.FlushPendingChangesAsync(cancellationToken);
+            hadPendingChanges = true;
         }
 
-        // 检查是否需要重新加载工作区
-        if (_fileWatcher?.NeedsWorkspaceReload == true)
+        // 如果有文件变更被处理过，或者工作区需要重新加载，都强制重新编译
+        // 这确保诊断信息是基于完整编译的结果
+        if (hadPendingChanges || _fileWatcher?.NeedsWorkspaceReload == true)
         {
-            _logger.LogInformation("Workspace needs reload, reloading...");
+            _logger.LogInformation("Forcing full recompile for accurate diagnostics...");
             await ForceRecompileAsync(cancellationToken);
-            _fileWatcher.ClearNeedsReload();
-            _logger.LogInformation("Workspace reloaded");
+            _fileWatcher?.ClearNeedsReload();
+            _logger.LogInformation("Workspace recompiled");
         }
     }
 
