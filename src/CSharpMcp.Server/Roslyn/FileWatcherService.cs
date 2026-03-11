@@ -207,6 +207,19 @@ internal sealed class FileWatcherService : IDisposable
     }
 
     /// <summary>
+    /// 清除待处理的文件变更（在强制重新编译后调用）
+    /// </summary>
+    internal void ClearPendingChanges()
+    {
+        lock (_pendingChangesLock)
+        {
+            _pendingFileChanges.Clear();
+            _hasPendingChanges = false;
+            _logger.LogDebug("Pending changes cleared");
+        }
+    }
+
+    /// <summary>
     /// 是否需要 Unity 刷新（当 Unity 项目的 cs 文件增删时）
     /// </summary>
     public bool NeedsUnityRefresh => _needsUnityRefresh;
