@@ -492,19 +492,6 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     public bool IsWorkspaceLoaded => _currentSolution != null;
 
     /// <summary>
-    /// 确保工作区是最新的（处理待处理的文件变更）
-    /// 用于符号查询前确保编译状态是最新的
-    /// </summary>
-    public async Task EnsureUpToDateAsync(CancellationToken cancellationToken = default)
-    {
-        if (_fileWatcher?.HasPendingChanges == true)
-        {
-            _logger.LogInformation("Flushing pending file changes before symbol query");
-            await _fileWatcher.FlushPendingChangesAsync(cancellationToken);
-        }
-    }
-
-    /// <summary>
     /// 检查工作区是否需要重新加载（当 sln/csproj 变更或文件删除/添加时）
     /// </summary>
     public bool NeedsWorkspaceReload => _fileWatcher?.NeedsWorkspaceReload ?? false;

@@ -38,12 +38,6 @@ public interface IWorkspaceManager
     Task<WorkspaceInfo> LoadAsync(string path, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 确保工作区是最新的（处理待处理的文件变更）
-    /// 用于符号查询前确保编译状态是最新的
-    /// </summary>
-    Task EnsureUpToDateAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// 检查工作区是否需要重新加载（当 sln/csproj 变更或文件删除/添加时）
     /// </summary>
     bool NeedsWorkspaceReload { get; }
