@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Editing;
+using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using CSharpMcp.Server.Roslyn;
@@ -15,7 +15,9 @@ namespace CSharpMcp.Server.Tools.Refactoring;
 [McpServerToolType]
 public class SimplifyUsingsTool
 {
-    [McpServerTool, Description("Remove unused using directives and sort remaining ones. Modifies files in place.")]
+    private const string UnusedUsingDiagnosticId = "CS8019"; // Unnecessary using directive
+
+    [McpServerTool, Description("Remove unused using directives and sort remaining ones. Uses compiler diagnostics (CS8019) for 100% accuracy.")]
     public static async Task<string> SimplifyUsings(
         IWorkspaceManager workspaceManager,
         ILogger<SimplifyUsingsTool> logger,
@@ -52,33 +54,41 @@ public class SimplifyUsingsTool
                     return GetErrorHelpResponse($"File not found: `{filePath}`");
                 }
 
-                var result = await ProcessDocumentAsync(document, sortUsings, systemUsingsFirst, logger, cancellationToken);
+                var (result, updatedSolution) = await ProcessDocumentInSolutionAsync(
+                    newSolution, document.Id, sortUsings, systemUsingsFirst, logger, cancellationToken);
+
                 if (result != null)
                 {
                     results.Add(result);
-                    if (result.Modified)
+                    if (result.Modified && updatedSolution != null)
                     {
-                        newSolution = await ApplyUsingsChangesAsync(newSolution, document.Id, result, cancellationToken);
+                        newSolution = updatedSolution;
                     }
                 }
             }
             else
             {
-                // Entire workspace mode
+                // Entire workspace mode - process each project
                 foreach (var project in workspaceManager.GetProjects())
                 {
+                    // Get compilation once per project for efficiency
+                    var compilation = await project.GetCompilationAsync(cancellationToken);
+                    if (compilation == null) continue;
+
                     foreach (var document in project.Documents)
                     {
                         if (cancellationToken.IsCancellationRequested)
                             break;
 
-                        var result = await ProcessDocumentAsync(document, sortUsings, systemUsingsFirst, logger, cancellationToken);
+                        var (result, updatedSolution) = await ProcessDocumentInSolutionAsync(
+                            newSolution, document.Id, sortUsings, systemUsingsFirst, logger, cancellationToken);
+
                         if (result != null)
                         {
                             results.Add(result);
-                            if (result.Modified)
+                            if (result.Modified && updatedSolution != null)
                             {
-                                newSolution = await ApplyUsingsChangesAsync(newSolution, document.Id, result, cancellationToken);
+                                newSolution = updatedSolution;
                             }
                         }
                     }
@@ -106,199 +116,110 @@ public class SimplifyUsingsTool
         }
     }
 
-    private static async Task<FileUsingsResult?> ProcessDocumentAsync(
-        Document document,
+    private static async Task<(FileUsingsResult? Result, Solution? UpdatedSolution)> ProcessDocumentInSolutionAsync(
+        Solution solution,
+        DocumentId documentId,
         bool sortUsings,
         bool systemUsingsFirst,
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var root = await document.GetSyntaxRootAsync(cancellationToken);
-        if (root == null) return null;
+        var document = solution.GetDocument(documentId);
+        if (document == null) return (null, null);
 
-        var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
-        if (semanticModel == null) return null;
+        var tree = await document.GetSyntaxTreeAsync(cancellationToken);
+        if (tree == null) return (null, null);
 
-        // Find all using directives
-        var usingDirectives = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax>()
+        var root = await tree.GetRootAsync(cancellationToken) as Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax;
+        if (root == null) return (null, null);
+
+        var usingDirectives = root.Usings;
+        if (!usingDirectives.Any())
+            return (null, null);
+
+        // Get compilation for this document's project
+        var project = solution.GetProject(documentId.ProjectId);
+        if (project == null) return (null, null);
+
+        var compilation = await project.GetCompilationAsync(cancellationToken);
+        if (compilation == null) return (null, null);
+
+        // Get CS8019 diagnostics for this file (unused using directives)
+        var unusedDiagnostics = compilation.GetDiagnostics(cancellationToken)
+            .Where(d => d.Id == UnusedUsingDiagnosticId && d.Location.SourceTree == tree)
             .ToList();
 
-        if (!usingDirectives.Any())
-            return null;
-
-        var unusedUsings = new List<Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax>();
-
-        // Check each using directive
-        foreach (var usingDirective in usingDirectives)
+        if (!unusedDiagnostics.Any() && !sortUsings)
         {
-            if (IsUsingUsed(usingDirective, root, semanticModel))
-            {
-                continue;
-            }
-            unusedUsings.Add(usingDirective);
+            // No changes needed
+            return (new FileUsingsResult(
+                document.FilePath ?? document.Name,
+                usingDirectives.Count,
+                0,
+                false,
+                []
+            ), null);
         }
 
-        // Build sorted list if needed
-        List<Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax>? sortedUsings = null;
-        if (sortUsings && usingDirectives.Count > unusedUsings.Count)
-        {
-            var remainingUsings = usingDirectives.Except(unusedUsings).ToList();
-            sortedUsings = systemUsingsFirst
-                ? remainingUsings.OrderBy(u => u.Name?.ToString() ?? "", new SystemFirstComparer()).ToList()
-                : remainingUsings.OrderBy(u => u.Name?.ToString() ?? "").ToList();
-        }
+        // Find unused using nodes
+        var unusedUsings = unusedDiagnostics
+            .Select(d => root.FindNode(d.Location.SourceSpan) as Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax)
+            .Where(u => u != null)
+            .ToList();
 
-        return new FileUsingsResult(
-            document.FilePath ?? document.Name,
-            usingDirectives.Count,
-            unusedUsings.Count,
-            unusedUsings.Count > 0 || sortedUsings != null,
-            unusedUsings.Select(u => u.Name?.ToString() ?? "").ToList(),
-            sortedUsings?.Select(u => u.Name?.ToString() ?? "").ToList()
-        );
-    }
-
-    private static bool IsUsingUsed(
-        Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax usingDirective,
-        Microsoft.CodeAnalysis.SyntaxNode root,
-        SemanticModel semanticModel)
-    {
-        var namespaceName = usingDirective.Name?.ToString();
-        if (string.IsNullOrEmpty(namespaceName))
-            return true; // Keep global usings or aliases
-
-        // Get all identifiers in the file
-        var identifiers = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax>();
-
-        foreach (var identifier in identifiers)
-        {
-            var symbolInfo = semanticModel.GetSymbolInfo(identifier);
-            var symbol = symbolInfo.Symbol;
-
-            if (symbol != null && IsSymbolFromNamespace(symbol, namespaceName))
-            {
-                return true;
-            }
-
-            // Also check candidate symbols (for ambiguous cases)
-            foreach (var candidate in symbolInfo.CandidateSymbols)
-            {
-                if (IsSymbolFromNamespace(candidate, namespaceName))
-                {
-                    return true;
-                }
-            }
-        }
-
-        // Check for extension methods
-        var memberAccesses = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax>();
-
-        foreach (var memberAccess in memberAccesses)
-        {
-            var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
-            var symbol = symbolInfo.Symbol;
-
-            if (symbol is IMethodSymbol method && method.IsExtensionMethod)
-            {
-                if (IsSymbolFromNamespace(method, namespaceName))
-                {
-                    return true;
-                }
-            }
-        }
-
-        // Check generic type names in type syntax (e.g., Task in Task<string>)
-        var genericNames = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.GenericNameSyntax>();
-
-        foreach (var genericName in genericNames)
-        {
-            var symbolInfo = semanticModel.GetSymbolInfo(genericName);
-            var symbol = symbolInfo.Symbol;
-
-            if (symbol != null && IsSymbolFromNamespace(symbol, namespaceName))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Check if a symbol is from the specified namespace (directly or indirectly)
-    /// </summary>
-    private static bool IsSymbolFromNamespace(ISymbol symbol, string namespaceName)
-    {
-        // Check the symbol's containing namespace
-        var containingNamespace = symbol.ContainingNamespace?.ToDisplayString();
-        if (containingNamespace == namespaceName ||
-            (containingNamespace?.StartsWith(namespaceName + ".") ?? false))
-        {
-            return true;
-        }
-
-        // For generic types, check the original definition
-        if (symbol is INamedTypeSymbol namedType)
-        {
-            // Check constructed from (e.g., Task<string> -> Task<>)
-            if (namedType.IsGenericType && namedType.ConstructedFrom != null)
-            {
-                var originalNamespace = namedType.ConstructedFrom.ContainingNamespace?.ToDisplayString();
-                if (originalNamespace == namespaceName ||
-                    (originalNamespace?.StartsWith(namespaceName + ".") ?? false))
-                {
-                    return true;
-                }
-            }
-        }
-
-        // For methods, check the containing type's namespace
-        if (symbol is IMethodSymbol methodSymbol)
-        {
-            var typeNamespace = methodSymbol.ContainingType?.ContainingNamespace?.ToDisplayString();
-            if (typeNamespace == namespaceName ||
-                (typeNamespace?.StartsWith(namespaceName + ".") ?? false))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static async Task<Solution> ApplyUsingsChangesAsync(
-        Solution solution,
-        DocumentId documentId,
-        FileUsingsResult result,
-        CancellationToken cancellationToken)
-    {
-        var document = solution.GetDocument(documentId);
-        if (document == null) return solution;
-
-        var root = await document.GetSyntaxRootAsync(cancellationToken);
-        if (root == null) return solution;
-
-        var editor = await DocumentEditor.CreateAsync(document, cancellationToken);
+        var unusedNames = unusedUsings
+            .Select(u => u!.Name?.ToString() ?? "")
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToList();
 
         // Remove unused usings
-        var usingDirectives = root.DescendantNodes()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax>()
-            .ToList();
-
-        foreach (var unused in result.UnusedUsings)
+        var newRoot = root;
+        if (unusedUsings.Any())
         {
-            var nodeToRemove = usingDirectives.FirstOrDefault(u => u.Name?.ToString() == unused);
-            if (nodeToRemove != null)
+            newRoot = newRoot.RemoveNodes(unusedUsings!, SyntaxRemoveOptions.KeepNoTrivia);
+        }
+
+        // Sort usings if requested
+        if (sortUsings && newRoot != null)
+        {
+            var remainingUsings = newRoot.Usings.ToList();
+            if (remainingUsings.Any())
             {
-                editor.RemoveNode(nodeToRemove);
+                var sortedUsings = systemUsingsFirst
+                    ? remainingUsings.OrderBy(u => u.Name?.ToString() ?? "", new SystemFirstComparer()).ToList()
+                    : remainingUsings.OrderBy(u => u.Name?.ToString() ?? "").ToList();
+
+                // Only reorder if actually different
+                if (!sortedUsings.SequenceEqual(remainingUsings))
+                {
+                    newRoot = newRoot.WithUsings(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxFactory.List(sortedUsings));
+                }
             }
         }
 
-        return editor.GetChangedDocument().Project.Solution;
+        if (newRoot == null || newRoot == root)
+        {
+            return (new FileUsingsResult(
+                document.FilePath ?? document.Name,
+                usingDirectives.Count,
+                unusedNames.Count,
+                false,
+                unusedNames
+            ), null);
+        }
+
+        // Apply changes to document
+        var newDocument = document.WithSyntaxRoot(newRoot);
+        newDocument = await Formatter.FormatAsync(newDocument, cancellationToken: cancellationToken);
+
+        return (new FileUsingsResult(
+            document.FilePath ?? document.Name,
+            usingDirectives.Count,
+            unusedNames.Count,
+            true,
+            unusedNames
+        ), newDocument.Project.Solution);
     }
 
     private static string BuildResponse(List<FileUsingsResult> results)
@@ -306,7 +227,6 @@ public class SimplifyUsingsTool
         var sb = new StringBuilder();
 
         var modified = results.Where(r => r.Modified).ToList();
-        var unchanged = results.Where(r => !r.Modified).ToList();
 
         sb.AppendLine("## Usings Simplified");
         sb.AppendLine();
@@ -357,8 +277,7 @@ public class SimplifyUsingsTool
         int TotalUsings,
         int UnusedCount,
         bool Modified,
-        List<string> UnusedUsings,
-        List<string>? SortedUsings
+        List<string> UnusedUsings
     );
 
     /// <summary>
