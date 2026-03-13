@@ -43,6 +43,17 @@ public class SimplifyUsingsTool
 
             logger.LogInformation("Simplifying usings for: {FilePath}", filePath ?? "entire workspace");
 
+            // Safeguard: Require filePath for large workspaces
+            var totalDocuments = workspaceManager.GetProjects().Sum(p => p.DocumentIds.Count);
+            if (string.IsNullOrEmpty(filePath) && totalDocuments > 100)
+            {
+                return GetErrorHelpResponse(
+                    $"Large workspace detected ({totalDocuments} files). " +
+                    "Please specify a `filePath` parameter to process a specific file. " +
+                    "Processing the entire workspace may take a long time and affect many files.\n\n" +
+                    "Usage: `SimplifyUsings(filePath: \"path/to/YourFile.cs\")`");
+            }
+
             var results = new List<FileUsingsResult>();
             var newSolution = solution;
 
@@ -56,7 +67,7 @@ public class SimplifyUsingsTool
                 }
 
                 var (result, updatedSolution) = await ProcessDocumentInSolutionAsync(
-                    newSolution, document.Id, sortUsings, systemUsingsFirst, logger, cancellationToken);
+                    newSolution, document.Id, sortUsings, systemUsingsFirst, workspaceManager.WorkspacePath, logger, cancellationToken);
 
                 if (result != null)
                 {
@@ -82,7 +93,7 @@ public class SimplifyUsingsTool
                             break;
 
                         var (result, updatedSolution) = await ProcessDocumentInSolutionAsync(
-                            newSolution, document.Id, sortUsings, systemUsingsFirst, logger, cancellationToken);
+                            newSolution, document.Id, sortUsings, systemUsingsFirst, workspaceManager.WorkspacePath, logger, cancellationToken);
 
                         if (result != null)
                         {
@@ -129,6 +140,7 @@ public class SimplifyUsingsTool
         DocumentId documentId,
         bool sortUsings,
         bool systemUsingsFirst,
+        string? workspacePath,
         ILogger logger,
         CancellationToken cancellationToken)
     {
@@ -162,6 +174,7 @@ public class SimplifyUsingsTool
             // No changes needed
             return (new FileUsingsResult(
                 document.FilePath ?? document.Name,
+                MarkdownHelper.GetDisplayPath(document.FilePath ?? document.Name, workspacePath),
                 usingDirectives.Count,
                 0,
                 false,
@@ -210,6 +223,7 @@ public class SimplifyUsingsTool
         {
             return (new FileUsingsResult(
                 document.FilePath ?? document.Name,
+                MarkdownHelper.GetDisplayPath(document.FilePath ?? document.Name, workspacePath),
                 usingDirectives.Count,
                 unusedNames.Count,
                 false,
@@ -223,6 +237,7 @@ public class SimplifyUsingsTool
 
         return (new FileUsingsResult(
             document.FilePath ?? document.Name,
+            MarkdownHelper.GetDisplayPath(document.FilePath ?? document.Name, workspacePath),
             usingDirectives.Count,
             unusedNames.Count,
             true,
@@ -246,7 +261,7 @@ public class SimplifyUsingsTool
 
             foreach (var file in modified.Take(20))
             {
-                sb.AppendLine($"- `{file.FileName}`: Removed {file.UnusedCount} unused usings");
+                sb.AppendLine($"- `{file.DisplayPath ?? file.FileName}`: Removed {file.UnusedCount} unused usings");
                 if (file.UnusedUsings.Any())
                 {
                     sb.AppendLine($"  - Removed: {string.Join(", ", file.UnusedUsings.Take(5))}{(file.UnusedUsings.Count > 5 ? "..." : "")}");
@@ -288,7 +303,7 @@ public class SimplifyUsingsTool
 
             foreach (var file in modified.Take(20))
             {
-                sb.AppendLine($"- `{file.FileName}`: Remove {file.UnusedCount} unused usings");
+                sb.AppendLine($"- `{file.DisplayPath ?? file.FileName}`: Remove {file.UnusedCount} unused usings");
                 if (file.UnusedUsings.Any())
                 {
                     sb.AppendLine($"  - `using {string.Join("`\n  - `using ", file.UnusedUsings.Take(5))}`");
@@ -325,6 +340,7 @@ public class SimplifyUsingsTool
 
     private record FileUsingsResult(
         string FileName,
+        string? DisplayPath,
         int TotalUsings,
         int UnusedCount,
         bool Modified,

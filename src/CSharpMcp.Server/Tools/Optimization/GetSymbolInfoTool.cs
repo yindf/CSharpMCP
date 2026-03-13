@@ -63,17 +63,28 @@ public class GetSymbolInfoTool
             ISymbol? symbol;
             if (allSymbols.Count > 1 && !parsedKind.HasValue)
             {
-                // Prefer types (classes, interfaces) over members (fields, methods)
-                symbol = allSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol)?.Symbol
-                      ?? allSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol or IPropertySymbol)?.Symbol
-                      ?? allSymbols.First().Symbol;
-
-                // If we had to make a choice, show disambiguation info
-                // Use SymbolEqualityComparer for proper symbol comparison
-                if (!SymbolEqualityComparer.Default.Equals(symbol, allSymbols.First().Symbol) || allSymbols.Count(rs => rs.Symbol.Kind == symbol.Kind) > 1)
+                // If filePath was provided, trust proximity ordering (first symbol is best match)
+                // ResolvedSymbol is already sorted by file match + line distance
+                if (!string.IsNullOrEmpty(filePath))
                 {
-                    logger.LogInformation("Multiple symbols found for {SymbolName}, showing disambiguation", symbolName);
-                    return BuildDisambiguationResponse(symbolName, allSymbols);
+                    symbol = allSymbols.First().Symbol;
+                    logger.LogInformation("Auto-selected symbol by proximity: {SymbolName} in {FilePath}",
+                        symbol.Name, allSymbols.First().FilePath);
+                }
+                else
+                {
+                    // No filePath - use kind preference (types over members)
+                    symbol = allSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol)?.Symbol
+                          ?? allSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol or IPropertySymbol)?.Symbol
+                          ?? allSymbols.First().Symbol;
+
+                    // If we had to make a choice, show disambiguation info
+                    // Use SymbolEqualityComparer for proper symbol comparison
+                    if (!SymbolEqualityComparer.Default.Equals(symbol, allSymbols.First().Symbol) || allSymbols.Count(rs => rs.Symbol.Kind == symbol.Kind) > 1)
+                    {
+                        logger.LogInformation("Multiple symbols found for {SymbolName}, showing disambiguation", symbolName);
+                        return BuildDisambiguationResponse(symbolName, allSymbols);
+                    }
                 }
             }
             else
