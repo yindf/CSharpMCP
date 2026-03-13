@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
@@ -100,7 +101,7 @@ public class RenameSymbolTool
             logger.LogInformation("Successfully renamed '{OldName}' to '{NewName}' across {Count} files",
                 symbol.Name, newName, result.ChangedFiles.Count);
 
-            return BuildSuccessResponse(symbol, newName, result.ChangedFiles.Count, totalRefs);
+            return BuildSuccessResponse(symbol, newName, result.ChangedFiles, totalRefs);
         }
         catch (System.Exception ex)
         {
@@ -109,8 +110,9 @@ public class RenameSymbolTool
         }
     }
 
-    private static string BuildSuccessResponse(ISymbol symbol, string newName, int affectedFiles, int totalRefs)
+    private static string BuildSuccessResponse(ISymbol symbol, string newName, IReadOnlyList<string> changedFiles, int totalRefs)
     {
+        const int maxFilesToShow = 10;
         var sb = new StringBuilder();
 
         sb.AppendLine($"## Renamed: `{symbol.Name}` → `{newName}`");
@@ -119,7 +121,26 @@ public class RenameSymbolTool
         sb.AppendLine($"- **Symbol**: `{symbol.GetDisplayName()}`");
         sb.AppendLine($"- **Kind**: {symbol.Kind}");
         sb.AppendLine($"- **References Updated**: {totalRefs}");
-        sb.AppendLine($"- **Files Modified**: {affectedFiles}");
+        sb.AppendLine($"- **Files Modified**: {changedFiles.Count}");
+
+        if (changedFiles.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("**Modified Files**:");
+
+            var filesToShow = changedFiles.Take(maxFilesToShow).ToList();
+            foreach (var file in filesToShow)
+            {
+                // Show relative path for brevity
+                var displayPath = file.Contains("src/") ? file.Substring(file.IndexOf("src/") + 4) : file;
+                sb.AppendLine($"- `{displayPath}`");
+            }
+
+            if (changedFiles.Count > maxFilesToShow)
+            {
+                sb.AppendLine($"- ... and {changedFiles.Count - maxFilesToShow} more files");
+            }
+        }
 
         return sb.ToString();
     }
