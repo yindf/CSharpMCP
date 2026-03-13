@@ -24,7 +24,8 @@ public class RenameSymbolTool
         [Description("The new name for the symbol")] string newName,
         [Description("The name of the symbol to rename")] string symbolName = "",
         [Description("Path to the file containing the symbol")] string filePath = "",
-        [Description("1-based line number near the symbol declaration")] int lineNumber = 0)
+        [Description("1-based line number near the symbol declaration")] int lineNumber = 0,
+        [Description("If true, only preview changes without applying them")] bool previewOnly = false)
     {
         try
         {
@@ -91,6 +92,26 @@ public class RenameSymbolTool
                 solution.Options,
                 cancellationToken);
 
+            // Get reference locations with line numbers for preview display
+            var refLocationsWithLines = new List<(string FilePath, int Line)>();
+            foreach (var refLoc in refList.SelectMany(r => r.Locations))
+            {
+                var loc = refLoc.Location;
+                if (loc.IsInSource && loc.SourceTree != null)
+                {
+                    var line = loc.GetLineSpan().StartLinePosition.Line + 1;
+                    var path = refLoc.Document.FilePath ?? refLoc.Document.Name;
+                    refLocationsWithLines.Add((path, line));
+                }
+            }
+
+            if (previewOnly)
+            {
+                logger.LogInformation("Preview rename: '{OldName}' -> '{NewName}' across {Count} files",
+                    symbol.Name, newName, affectedFiles);
+                return BuildPreviewResponse(symbol, newName, refLocationsWithLines, affectedFiles);
+            }
+
             // Apply changes to workspace and persist to disk
             var result = await workspaceManager.ApplyChangesAsync(newSolution, cancellationToken);
             if (!result.Success)
@@ -101,7 +122,7 @@ public class RenameSymbolTool
             logger.LogInformation("Successfully renamed '{OldName}' to '{NewName}' across {Count} files",
                 symbol.Name, newName, result.ChangedFiles.Count);
 
-            return BuildSuccessResponse(symbol, newName, result.ChangedFiles, totalRefs);
+            return BuildRenameResult(symbol, newName, result.ChangedFiles, totalRefs);
         }
         catch (System.Exception ex)
         {
@@ -110,7 +131,7 @@ public class RenameSymbolTool
         }
     }
 
-    private static string BuildSuccessResponse(ISymbol symbol, string newName, IReadOnlyList<string> changedFiles, int totalRefs)
+    private static string BuildRenameResult(ISymbol symbol, string newName, IReadOnlyList<string> changedFiles, int totalRefs)
     {
         const int maxFilesToShow = 10;
         var sb = new StringBuilder();
@@ -131,8 +152,7 @@ public class RenameSymbolTool
             var filesToShow = changedFiles.Take(maxFilesToShow).ToList();
             foreach (var file in filesToShow)
             {
-                // Show relative path for brevity
-                var displayPath = file.Contains("src/") ? file.Substring(file.IndexOf("src/") + 4) : file;
+                var displayPath = GetDisplayPath(file);
                 sb.AppendLine($"- `{displayPath}`");
             }
 
@@ -143,6 +163,58 @@ public class RenameSymbolTool
         }
 
         return sb.ToString();
+    }
+
+    private static string BuildPreviewResponse(ISymbol symbol, string newName, List<(string FilePath, int Line)> locations, int affectedFiles)
+    {
+        const int maxFilesToShow = 10;
+        var sb = new StringBuilder();
+
+        sb.AppendLine($"## Preview: Rename `{symbol.Name}` → `{newName}`");
+        sb.AppendLine();
+        sb.AppendLine("> **Preview Mode**: No changes will be applied. Use `previewOnly: false` to apply changes.");
+        sb.AppendLine();
+
+        sb.AppendLine($"- **Symbol**: `{symbol.GetDisplayName()}`");
+        sb.AppendLine($"- **Kind**: {symbol.Kind}");
+        sb.AppendLine($"- **References to Update**: {locations.Count}");
+        sb.AppendLine($"- **Files Affected**: {affectedFiles}");
+
+        if (locations.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("**Locations**:");
+
+            var groupedByFile = locations
+                .GroupBy(l => l.FilePath)
+                .OrderBy(g => g.Key)
+                .Take(maxFilesToShow);
+
+            foreach (var group in groupedByFile)
+            {
+                var displayPath = GetDisplayPath(group.Key);
+                var lines = group.Select(l => l.Line).OrderBy(l => l).Take(5);
+                var lineStr = string.Join(", ", lines);
+                if (group.Count() > 5) lineStr += $" (+{group.Count() - 5} more)";
+                sb.AppendLine($"- `{displayPath}`: L{lineStr}");
+            }
+
+            if (locations.Select(l => l.FilePath).Distinct().Count() > maxFilesToShow)
+            {
+                sb.AppendLine($"- ... and {affectedFiles - maxFilesToShow} more files");
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string GetDisplayPath(string fullPath)
+    {
+        if (fullPath.Contains("src/"))
+            return fullPath.Substring(fullPath.IndexOf("src/") + 4);
+        if (fullPath.Contains("tests/"))
+            return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
+        return fullPath;
     }
 
     private static string GetErrorHelpResponse(string message)

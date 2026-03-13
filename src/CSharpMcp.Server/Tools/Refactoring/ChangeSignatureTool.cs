@@ -25,7 +25,8 @@ public class ChangeSignatureTool
         [Description("The name of the method to change")] string methodName = "",
         [Description("Path to the file containing the method")] string filePath = "",
         [Description("1-based line number near the method declaration")] int lineNumber = 0,
-        [Description("Mapping of old parameter positions to new positions (e.g. '0:1,1:0' swaps first two params). Only needed for reordering.")] string? parameterMapping = null)
+        [Description("Mapping of old parameter positions to new positions (e.g. '0:1,1:0' swaps first two params). Only needed for reordering.")] string? parameterMapping = null,
+        [Description("If true, only preview changes without applying them")] bool previewOnly = false)
     {
         try
         {
@@ -109,10 +110,20 @@ public class ChangeSignatureTool
 
             // 2. Update all call sites
             int updatedCalls = 0;
+            var callSiteLocations = new List<(string FilePath, int Line)>();
             foreach (var refLocation in refList.SelectMany(r => r.Locations))
             {
                 var doc = newSolution.GetDocument(refLocation.Document.Id);
                 if (doc == null) continue;
+
+                // Collect call site locations for preview
+                var loc = refLocation.Location;
+                if (loc.IsInSource && loc.SourceTree != null)
+                {
+                    var line = loc.GetLineSpan().StartLinePosition.Line + 1;
+                    var path = doc.FilePath ?? doc.Name;
+                    callSiteLocations.Add((path, line));
+                }
 
                 var updatedSolution = await UpdateCallSiteAsync(
                     newSolution, doc.Id, refLocation, methodSymbol, mapping, logger, cancellationToken);
@@ -123,6 +134,13 @@ public class ChangeSignatureTool
                     changedFiles.Add(doc.FilePath ?? doc.Name);
                     updatedCalls++;
                 }
+            }
+
+            // Preview mode - return without applying changes
+            if (previewOnly)
+            {
+                logger.LogInformation("Preview signature change for method: {MethodName}", methodName);
+                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, changedFiles.Count);
             }
 
             // Apply changes to workspace and persist to disk
@@ -311,6 +329,63 @@ public class ChangeSignatureTool
         sb.AppendLine("> **Note**: If you removed parameters, call sites now use default values if available, or may have compilation errors if not.");
 
         return sb.ToString();
+    }
+
+    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("## Preview: Change Signature");
+        sb.AppendLine();
+        sb.AppendLine("> **Preview Mode**: No changes will be applied. Use `previewOnly: false` to apply changes.");
+        sb.AppendLine();
+
+        sb.AppendLine($"**Method**: `{method.Name}`");
+        sb.AppendLine($"**Old Parameters**: `{FormatParameters(method.Parameters)}`");
+        sb.AppendLine($"**New Parameters**: `({newParameters})`");
+        sb.AppendLine();
+        sb.AppendLine($"- **Files to Modify**: {filesAffected}");
+        sb.AppendLine($"- **Call Sites**: {callSites.Count}");
+
+        if (callSites.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("**Call Sites**:");
+
+            var groupedByFile = callSites
+                .GroupBy(c => c.FilePath)
+                .OrderBy(g => g.Key)
+                .Take(10);
+
+            foreach (var group in groupedByFile)
+            {
+                var displayPath = GetDisplayPath(group.Key);
+                var lines = group.Select(c => c.Line).OrderBy(l => l).Take(5);
+                var lineStr = string.Join(", ", lines);
+                if (group.Count() > 5) lineStr += $" (+{group.Count() - 5} more)";
+                sb.AppendLine($"- `{displayPath}`: L{lineStr}");
+            }
+
+            var distinctFiles = callSites.Select(c => c.FilePath).Distinct().Count();
+            if (distinctFiles > 10)
+            {
+                sb.AppendLine($"- ... and {distinctFiles - 10} more files");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("> **Warning**: If you remove required parameters, call sites may have compilation errors.");
+
+        return sb.ToString();
+    }
+
+    private static string GetDisplayPath(string fullPath)
+    {
+        if (fullPath.Contains("src/"))
+            return fullPath.Substring(fullPath.IndexOf("src/") + 4);
+        if (fullPath.Contains("tests/"))
+            return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
+        return fullPath;
     }
 
     private static string FormatParameters(IReadOnlyList<IParameterSymbol> parameters)

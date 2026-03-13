@@ -24,7 +24,8 @@ public class SimplifyUsingsTool
         CancellationToken cancellationToken,
         [Description("Path to specific file to process (null = entire workspace)")] string filePath = null,
         [Description("Whether to sort usings after removing unused ones")] bool sortUsings = true,
-        [Description("Whether to place System usings first when sorting")] bool systemUsingsFirst = true)
+        [Description("Whether to place System usings first when sorting")] bool systemUsingsFirst = true,
+        [Description("If true, only preview changes without applying them")] bool previewOnly = false)
     {
         try
         {
@@ -96,6 +97,13 @@ public class SimplifyUsingsTool
             }
 
             // Apply changes to workspace and persist to disk
+            if (previewOnly)
+            {
+                logger.LogInformation("Preview simplify usings for: {FilePath} - {Count} files would be modified",
+                    filePath ?? "entire workspace", results.Count(r => r.Modified));
+                return BuildPreviewResponse(results);
+            }
+
             if (results.Any(r => r.Modified))
             {
                 var applyResult = await workspaceManager.ApplyChangesAsync(newSolution, cancellationToken);
@@ -258,6 +266,49 @@ public class SimplifyUsingsTool
         sb.AppendLine();
         sb.AppendLine($"**Files Scanned**: {results.Count}");
         sb.AppendLine($"**Total Usings Removed**: {results.Sum(r => r.UnusedCount)}");
+
+        return sb.ToString();
+    }
+
+    private static string BuildPreviewResponse(List<FileUsingsResult> results)
+    {
+        var sb = new StringBuilder();
+        var modified = results.Where(r => r.Modified).ToList();
+
+        sb.AppendLine("## Preview: Simplify Usings");
+        sb.AppendLine();
+        sb.AppendLine("> **Preview Mode**: No changes will be applied. Use `previewOnly: false` to apply changes.");
+        sb.AppendLine();
+
+        if (modified.Any())
+        {
+            sb.AppendLine($"**Files to Modify**: {modified.Count}");
+            sb.AppendLine($"**Total Usings to Remove**: {modified.Sum(r => r.UnusedCount)}");
+            sb.AppendLine();
+
+            foreach (var file in modified.Take(20))
+            {
+                sb.AppendLine($"- `{file.FileName}`: Remove {file.UnusedCount} unused usings");
+                if (file.UnusedUsings.Any())
+                {
+                    sb.AppendLine($"  - `using {string.Join("`\n  - `using ", file.UnusedUsings.Take(5))}`");
+                    if (file.UnusedUsings.Count > 5)
+                        sb.AppendLine($"  - ... and {file.UnusedUsings.Count - 5} more");
+                }
+            }
+
+            if (modified.Count > 20)
+            {
+                sb.AppendLine($"- ... and {modified.Count - 20} more files");
+            }
+        }
+        else
+        {
+            sb.AppendLine("**No changes needed** - all using directives are in use.");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"**Files Scanned**: {results.Count}");
 
         return sb.ToString();
     }
