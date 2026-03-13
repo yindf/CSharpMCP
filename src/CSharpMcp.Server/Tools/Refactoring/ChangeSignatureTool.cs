@@ -4,12 +4,11 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CSharpMcp.Server.Roslyn;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.Refactoring;
 
@@ -108,9 +107,11 @@ public class ChangeSignatureTool
                 changedFiles.Add(declarationDoc.FilePath ?? declarationDoc.Name);
             }
 
-            // 2. Update all call sites
+            // 2. Update all call sites and detect delegate usage
             int updatedCalls = 0;
             var callSiteLocations = new List<(string FilePath, int Line)>();
+            var delegateUsages = new List<(string FilePath, int Line)>();
+
             foreach (var refLocation in refList.SelectMany(r => r.Locations))
             {
                 var doc = newSolution.GetDocument(refLocation.Document.Id);
@@ -123,6 +124,21 @@ public class ChangeSignatureTool
                     var line = loc.GetLineSpan().StartLinePosition.Line + 1;
                     var path = doc.FilePath ?? doc.Name;
                     callSiteLocations.Add((path, line));
+                }
+
+                // Check if this is a delegate usage (method group conversion)
+                var isDelegateUsage = await IsDelegateUsageAsync(
+                    newSolution, doc.Id, refLocation, methodSymbol, cancellationToken);
+
+                if (isDelegateUsage)
+                {
+                    if (loc.IsInSource && loc.SourceTree != null)
+                    {
+                        var line = loc.GetLineSpan().StartLinePosition.Line + 1;
+                        var path = doc.FilePath ?? doc.Name;
+                        delegateUsages.Add((path, line));
+                    }
+                    continue; // Skip delegate usages - they can't be auto-updated
                 }
 
                 var updatedSolution = await UpdateCallSiteAsync(
@@ -140,7 +156,7 @@ public class ChangeSignatureTool
             if (previewOnly)
             {
                 logger.LogInformation("Preview signature change for method: {MethodName}", methodName);
-                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, changedFiles.Count);
+                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, changedFiles.Count, delegateUsages);
             }
 
             // Apply changes to workspace and persist to disk
@@ -156,7 +172,7 @@ public class ChangeSignatureTool
                     methodSymbol.Name, result.ChangedFiles.Count, updatedCalls);
             }
 
-            return BuildResponse(methodSymbol, newParameters, changedFiles.Count, updatedCalls);
+            return BuildResponse(methodSymbol, newParameters, changedFiles.Count, updatedCalls, delegateUsages);
         }
         catch (System.Exception ex)
         {
@@ -311,7 +327,66 @@ public class ChangeSignatureTool
         return solution;
     }
 
-    private static string BuildResponse(IMethodSymbol method, string newParameters, int filesChanged, int callsUpdated)
+    private static async Task<bool> IsDelegateUsageAsync(
+        Solution solution,
+        DocumentId documentId,
+        ReferenceLocation refLocation,
+        IMethodSymbol methodSymbol,
+        CancellationToken cancellationToken)
+    {
+        var document = solution.GetDocument(documentId);
+        if (document == null) return false;
+
+        var root = await document.GetSyntaxRootAsync(cancellationToken);
+        if (root == null) return false;
+
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
+        if (semanticModel == null) return false;
+
+        // Find the node at this location
+        var node = root.FindNode(refLocation.Location.SourceSpan);
+
+        // Check if this is an invocation expression (direct call)
+        var invocation = node.AncestorsAndSelf()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+            .FirstOrDefault();
+
+        if (invocation != null)
+        {
+            // Check if the method is actually being invoked (not just referenced as identifier)
+            var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+            if (SymbolEqualityComparer.Default.Equals(symbolInfo.Symbol, methodSymbol))
+            {
+                return false; // Direct invocation, not a delegate usage
+            }
+        }
+
+        // Check for method group conversion (delegate usage)
+        // This happens when a method is assigned to a delegate variable, passed as argument, etc.
+        var identifierName = node as Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax
+            ?? node.AncestorsAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax>()
+                .FirstOrDefault();
+
+        if (identifierName != null)
+        {
+            var symbolInfo = semanticModel.GetSymbolInfo(identifierName);
+            if (SymbolEqualityComparer.Default.Equals(symbolInfo.Symbol, methodSymbol))
+            {
+                // Check if parent is NOT an invocation (then it's a delegate usage)
+                var parent = identifierName.Parent;
+                if (parent is not Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax)
+                {
+                    // Could be: assignment to delegate, method argument, etc.
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildResponse(IMethodSymbol method, string newParameters, int filesChanged, int callsUpdated, List<(string FilePath, int Line)> delegateUsages)
     {
         var sb = new StringBuilder();
 
@@ -325,13 +400,36 @@ public class ChangeSignatureTool
         sb.AppendLine($"- **Files Modified**: {filesChanged}");
         sb.AppendLine($"- **Call Sites Updated**: {callsUpdated}");
 
+        // Show delegate usage warnings
+        if (delegateUsages.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"⚠️ **Warning: {delegateUsages.Count} Delegate Usage(s) Detected**");
+            sb.AppendLine();
+            sb.AppendLine("This method is used as a delegate (e.g., passed as `Action<T>` or `Func<T>`). These usages cannot be auto-updated and may cause compilation errors:");
+            sb.AppendLine();
+
+            foreach (var (filePath, line) in delegateUsages.Take(5))
+            {
+                sb.AppendLine($"- `{GetDisplayPath(filePath)}`: L{line}");
+            }
+
+            if (delegateUsages.Count > 5)
+            {
+                sb.AppendLine($"- ... and {delegateUsages.Count - 5} more");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("> **Action Required**: Manually update delegate usages to match the new signature.");
+        }
+
         sb.AppendLine();
         sb.AppendLine("> **Note**: If you removed parameters, call sites now use default values if available, or may have compilation errors if not.");
 
         return sb.ToString();
     }
 
-    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected)
+    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected, List<(string FilePath, int Line)> delegateUsages)
     {
         var sb = new StringBuilder();
 
@@ -346,6 +444,12 @@ public class ChangeSignatureTool
         sb.AppendLine();
         sb.AppendLine($"- **Files to Modify**: {filesAffected}");
         sb.AppendLine($"- **Call Sites**: {callSites.Count}");
+
+        // Show delegate usage warnings
+        if (delegateUsages.Count > 0)
+        {
+            sb.AppendLine($"- ⚠️ **Delegate Usages**: {delegateUsages.Count} (cannot auto-update)");
+        }
 
         if (callSites.Count > 0)
         {
@@ -370,6 +474,25 @@ public class ChangeSignatureTool
             if (distinctFiles > 10)
             {
                 sb.AppendLine($"- ... and {distinctFiles - 10} more files");
+            }
+        }
+
+        // Show delegate usage details
+        if (delegateUsages.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("⚠️ **Delegate Usages (Require Manual Update)**:");
+            sb.AppendLine();
+            sb.AppendLine("This method is used as a delegate. These cannot be auto-updated:");
+
+            foreach (var (filePath, line) in delegateUsages.Take(5))
+            {
+                sb.AppendLine($"- `{GetDisplayPath(filePath)}`: L{line}");
+            }
+
+            if (delegateUsages.Count > 5)
+            {
+                sb.AppendLine($"- ... and {delegateUsages.Count - 5} more");
             }
         }
 
