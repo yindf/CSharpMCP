@@ -494,6 +494,11 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     public bool IsWorkspaceLoaded => _currentSolution != null;
 
     /// <summary>
+    /// 获取工作区根路径（.sln 或 .csproj 所在目录）
+    /// </summary>
+    public string? WorkspacePath => _loadedPath != null ? Path.GetDirectoryName(_loadedPath) : null;
+
+    /// <summary>
     /// 检查工作区是否需要重新加载（当 sln/csproj 变更或文件删除/添加时）
     /// </summary>
     public bool NeedsWorkspaceReload => _fileWatcher?.NeedsWorkspaceReload ?? false;

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -77,7 +78,7 @@ public class ChangeSignatureTool
                 mapping = ParseParameterMapping(parameterMapping);
             }
 
-            // Get all references (call sites)
+            // Get all references (call sites) in ORIGINAL solution BEFORE any modifications
             var references = await SymbolFinder.FindReferencesAsync(methodSymbol, solution, cancellationToken);
             var refList = references.ToList();
 
@@ -94,61 +95,32 @@ public class ChangeSignatureTool
                 return GetErrorHelpResponse("Could not find document containing method declaration.");
             }
 
-            // Apply changes
-            var newSolution = solution;
-            var changedFiles = new HashSet<string>();
-
-            // 1. Update method declaration
-            newSolution = await UpdateMethodDeclarationAsync(
-                newSolution, declarationDoc.Id, methodSymbol, newParameters, logger, cancellationToken);
-
-            if (newSolution != solution)
-            {
-                changedFiles.Add(declarationDoc.FilePath ?? declarationDoc.Name);
-            }
-
-            // 2. Update all call sites and detect delegate usage
-            int updatedCalls = 0;
-            var callSiteLocations = new List<(string FilePath, int Line)>();
+            // Analyze all references in ORIGINAL solution to detect delegate usages FIRST
             var delegateUsages = new List<(string FilePath, int Line)>();
+            var callSiteUpdates = new List<(DocumentId DocId, ReferenceLocation RefLocation, string FilePath, int Line)>();
 
             foreach (var refLocation in refList.SelectMany(r => r.Locations))
             {
-                var doc = newSolution.GetDocument(refLocation.Document.Id);
+                var loc = refLocation.Location;
+                if (!loc.IsInSource || loc.SourceTree == null) continue;
+
+                var line = loc.GetLineSpan().StartLinePosition.Line + 1;
+                var doc = solution.GetDocument(refLocation.Document.Id);
                 if (doc == null) continue;
 
-                // Collect call site locations for preview
-                var loc = refLocation.Location;
-                if (loc.IsInSource && loc.SourceTree != null)
-                {
-                    var line = loc.GetLineSpan().StartLinePosition.Line + 1;
-                    var path = doc.FilePath ?? doc.Name;
-                    callSiteLocations.Add((path, line));
-                }
+                var path = doc.FilePath ?? doc.Name;
 
-                // Check if this is a delegate usage (method group conversion)
+                // Check if this is a delegate usage in ORIGINAL solution (symbol matching works here)
                 var isDelegateUsage = await IsDelegateUsageAsync(
-                    newSolution, doc.Id, refLocation, methodSymbol, cancellationToken);
+                    solution, doc.Id, refLocation, methodSymbol, cancellationToken);
 
                 if (isDelegateUsage)
                 {
-                    if (loc.IsInSource && loc.SourceTree != null)
-                    {
-                        var line = loc.GetLineSpan().StartLinePosition.Line + 1;
-                        var path = doc.FilePath ?? doc.Name;
-                        delegateUsages.Add((path, line));
-                    }
-                    continue; // Skip delegate usages - they can't be auto-updated
+                    delegateUsages.Add((path, line));
                 }
-
-                var updatedSolution = await UpdateCallSiteAsync(
-                    newSolution, doc.Id, refLocation, methodSymbol, mapping, logger, cancellationToken);
-
-                if (updatedSolution != newSolution)
+                else
                 {
-                    newSolution = updatedSolution;
-                    changedFiles.Add(doc.FilePath ?? doc.Name);
-                    updatedCalls++;
+                    callSiteUpdates.Add((doc.Id, refLocation, path, line));
                 }
             }
 
@@ -156,13 +128,49 @@ public class ChangeSignatureTool
             if (previewOnly)
             {
                 logger.LogInformation("Preview signature change for method: {MethodName}", methodName);
-                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, changedFiles.Count, delegateUsages);
+                var callSiteLocations = callSiteUpdates.Select(u => (u.FilePath, u.Line)).ToList();
+                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, callSiteUpdates.Count + 1, delegateUsages, workspaceManager.WorkspacePath);
+            }
+
+            // Apply changes to working solution
+            var workingSolution = solution;
+            var changedFiles = new HashSet<string>();
+            int updatedCalls = 0;
+
+            // 1. FIRST: Update all NON-DELEGATE call sites (in original solution context)
+            foreach (var (docId, refLocation, path, line) in callSiteUpdates)
+            {
+                var updatedSolution = await UpdateCallSiteAsync(
+                    workingSolution, docId, refLocation, methodSymbol, mapping, logger, cancellationToken);
+
+                if (updatedSolution != workingSolution)
+                {
+                    workingSolution = updatedSolution;
+                    changedFiles.Add(path);
+                    updatedCalls++;
+                }
+            }
+
+            // 2. SECOND: Update the method declaration
+            // Need to re-get the document from working solution after call site updates
+            var updatedDeclarationDoc = workingSolution.GetDocument(declarationDoc.Id);
+            if (updatedDeclarationDoc == null)
+            {
+                return GetErrorHelpResponse("Could not find declaration document after call site updates.");
+            }
+
+            workingSolution = await UpdateMethodDeclarationAsync(
+                workingSolution, updatedDeclarationDoc.Id, methodSymbol, newParameters, logger, cancellationToken);
+
+            if (workingSolution != solution)
+            {
+                changedFiles.Add(declarationDoc.FilePath ?? declarationDoc.Name);
             }
 
             // Apply changes to workspace and persist to disk
             if (changedFiles.Any())
             {
-                var result = await workspaceManager.ApplyChangesAsync(newSolution, cancellationToken);
+                var result = await workspaceManager.ApplyChangesAsync(workingSolution, cancellationToken);
                 if (!result.Success)
                 {
                     return GetErrorHelpResponse(result.ErrorMessage ?? "Failed to apply changes.");
@@ -172,7 +180,7 @@ public class ChangeSignatureTool
                     methodSymbol.Name, result.ChangedFiles.Count, updatedCalls);
             }
 
-            return BuildResponse(methodSymbol, newParameters, changedFiles.Count, updatedCalls, delegateUsages);
+            return BuildResponse(methodSymbol, newParameters, changedFiles.Count, updatedCalls, delegateUsages, workspaceManager.WorkspacePath);
         }
         catch (System.Exception ex)
         {
@@ -346,47 +354,63 @@ public class ChangeSignatureTool
         // Find the node at this location
         var node = root.FindNode(refLocation.Location.SourceSpan);
 
-        // Check if this is an invocation expression (direct call)
-        var invocation = node.AncestorsAndSelf()
-            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
-            .FirstOrDefault();
-
-        if (invocation != null)
-        {
-            // Check if the method is actually being invoked (not just referenced as identifier)
-            var symbolInfo = semanticModel.GetSymbolInfo(invocation);
-            if (SymbolEqualityComparer.Default.Equals(symbolInfo.Symbol, methodSymbol))
-            {
-                return false; // Direct invocation, not a delegate usage
-            }
-        }
-
-        // Check for method group conversion (delegate usage)
-        // This happens when a method is assigned to a delegate variable, passed as argument, etc.
+        // Find the identifier name for this method reference
+        // The node itself might be the identifier, or we need to find it in descendants
         var identifierName = node as Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax
-            ?? node.AncestorsAndSelf()
+            ?? node.DescendantNodes()
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax>()
                 .FirstOrDefault();
 
-        if (identifierName != null)
+        if (identifierName == null)
         {
-            var symbolInfo = semanticModel.GetSymbolInfo(identifierName);
-            if (SymbolEqualityComparer.Default.Equals(symbolInfo.Symbol, methodSymbol))
+            // Could not find identifier - assume not delegate usage to be safe
+            return false;
+        }
+
+        // Verify this identifier refers to our method
+        var symbolInfo = semanticModel.GetSymbolInfo(identifierName);
+        if (!SymbolEqualityComparer.Default.Equals(symbolInfo.Symbol, methodSymbol))
+        {
+            // Symbol doesn't match - this might be a different overload or unrelated
+            // Check candidate symbols as well
+            if (!symbolInfo.CandidateSymbols.Any(s => SymbolEqualityComparer.Default.Equals(s, methodSymbol)))
             {
-                // Check if parent is NOT an invocation (then it's a delegate usage)
-                var parent = identifierName.Parent;
-                if (parent is not Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax)
-                {
-                    // Could be: assignment to delegate, method argument, etc.
-                    return true;
-                }
+                return false;
             }
         }
 
-        return false;
+        // Now check: is this identifier being directly invoked, or used as a delegate?
+        // Walk up the parent chain to find if we're inside an invocation expression
+        var current = identifierName.Parent;
+        while (current != null)
+        {
+            // If we find an InvocationExpression where our identifier IS the expression being invoked
+            if (current is Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax invocation)
+            {
+                if (invocation.Expression == identifierName)
+                {
+                    return false; // Direct invocation - not a delegate usage
+                }
+            }
+
+            // Stop at statement level - we've checked enough context
+            if (current is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax)
+            {
+                break;
+            }
+
+            current = current.Parent;
+        }
+
+        // If we get here, the method reference is NOT a direct invocation
+        // It could be:
+        // - Passed as argument (method group)
+        // - Assigned to delegate variable
+        // - Used in += or -= for event subscription
+        return true;
     }
 
-    private static string BuildResponse(IMethodSymbol method, string newParameters, int filesChanged, int callsUpdated, List<(string FilePath, int Line)> delegateUsages)
+    private static string BuildResponse(IMethodSymbol method, string newParameters, int filesChanged, int callsUpdated, List<(string FilePath, int Line)> delegateUsages, string? workspacePath)
     {
         var sb = new StringBuilder();
 
@@ -411,7 +435,7 @@ public class ChangeSignatureTool
 
             foreach (var (filePath, line) in delegateUsages.Take(5))
             {
-                sb.AppendLine($"- `{GetDisplayPath(filePath)}`: L{line}");
+                sb.AppendLine($"- `{GetDisplayPath(filePath, workspacePath)}`: L{line}");
             }
 
             if (delegateUsages.Count > 5)
@@ -429,7 +453,7 @@ public class ChangeSignatureTool
         return sb.ToString();
     }
 
-    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected, List<(string FilePath, int Line)> delegateUsages)
+    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected, List<(string FilePath, int Line)> delegateUsages, string? workspacePath)
     {
         var sb = new StringBuilder();
 
@@ -463,7 +487,7 @@ public class ChangeSignatureTool
 
             foreach (var group in groupedByFile)
             {
-                var displayPath = GetDisplayPath(group.Key);
+                var displayPath = GetDisplayPath(group.Key, workspacePath);
                 var lines = group.Select(c => c.Line).OrderBy(l => l).Take(5);
                 var lineStr = string.Join(", ", lines);
                 if (group.Count() > 5) lineStr += $" (+{group.Count() - 5} more)";
@@ -487,7 +511,7 @@ public class ChangeSignatureTool
 
             foreach (var (filePath, line) in delegateUsages.Take(5))
             {
-                sb.AppendLine($"- `{GetDisplayPath(filePath)}`: L{line}");
+                sb.AppendLine($"- `{GetDisplayPath(filePath, workspacePath)}`: L{line}");
             }
 
             if (delegateUsages.Count > 5)
@@ -502,13 +526,30 @@ public class ChangeSignatureTool
         return sb.ToString();
     }
 
-    private static string GetDisplayPath(string fullPath)
+    private static string GetDisplayPath(string fullPath, string? workspacePath)
     {
+        // If we have a workspace path, make the path relative to it
+        if (!string.IsNullOrEmpty(workspacePath))
+        {
+            var normalizedFull = fullPath.Replace('\\', '/');
+            var normalizedWorkspace = workspacePath.Replace('\\', '/').TrimEnd('/');
+
+            if (normalizedFull.StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedFull.Substring(normalizedWorkspace.Length + 1);
+            }
+        }
+
+        // Fallback patterns for common project structures
+        if (fullPath.Contains("Assets/"))
+            return fullPath.Substring(fullPath.IndexOf("Assets/"));
         if (fullPath.Contains("src/"))
             return fullPath.Substring(fullPath.IndexOf("src/") + 4);
         if (fullPath.Contains("tests/"))
             return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
-        return fullPath;
+
+        // Final fallback: just show filename
+        return System.IO.Path.GetFileName(fullPath);
     }
 
     private static string FormatParameters(IReadOnlyList<IParameterSymbol> parameters)

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -109,7 +110,7 @@ public class RenameSymbolTool
             {
                 logger.LogInformation("Preview rename: '{OldName}' -> '{NewName}' across {Count} files",
                     symbol.Name, newName, affectedFiles);
-                return BuildPreviewResponse(symbol, newName, refLocationsWithLines, affectedFiles);
+                return BuildPreviewResponse(symbol, newName, refLocationsWithLines, affectedFiles, workspaceManager.WorkspacePath);
             }
 
             // Apply changes to workspace and persist to disk
@@ -122,7 +123,7 @@ public class RenameSymbolTool
             logger.LogInformation("Successfully renamed '{OldName}' to '{NewName}' across {Count} files",
                 symbol.Name, newName, result.ChangedFiles.Count);
 
-            return BuildRenameResult(symbol, newName, result.ChangedFiles, totalRefs);
+            return BuildRenameResult(symbol, newName, result.ChangedFiles, totalRefs, workspaceManager.WorkspacePath);
         }
         catch (System.Exception ex)
         {
@@ -131,7 +132,7 @@ public class RenameSymbolTool
         }
     }
 
-    private static string BuildRenameResult(ISymbol symbol, string newName, IReadOnlyList<string> changedFiles, int totalRefs)
+    private static string BuildRenameResult(ISymbol symbol, string newName, IReadOnlyList<string> changedFiles, int totalRefs, string? workspacePath)
     {
         const int maxFilesToShow = 10;
         var sb = new StringBuilder();
@@ -152,7 +153,7 @@ public class RenameSymbolTool
             var filesToShow = changedFiles.Take(maxFilesToShow).ToList();
             foreach (var file in filesToShow)
             {
-                var displayPath = GetDisplayPath(file);
+                var displayPath = GetDisplayPath(file, workspacePath);
                 sb.AppendLine($"- `{displayPath}`");
             }
 
@@ -165,7 +166,7 @@ public class RenameSymbolTool
         return sb.ToString();
     }
 
-    private static string BuildPreviewResponse(ISymbol symbol, string newName, List<(string FilePath, int Line)> locations, int affectedFiles)
+    private static string BuildPreviewResponse(ISymbol symbol, string newName, List<(string FilePath, int Line)> locations, int affectedFiles, string? workspacePath)
     {
         const int maxFilesToShow = 10;
         var sb = new StringBuilder();
@@ -192,7 +193,7 @@ public class RenameSymbolTool
 
             foreach (var group in groupedByFile)
             {
-                var displayPath = GetDisplayPath(group.Key);
+                var displayPath = GetDisplayPath(group.Key, workspacePath);
                 var lines = group.Select(l => l.Line).OrderBy(l => l).Take(5);
                 var lineStr = string.Join(", ", lines);
                 if (group.Count() > 5) lineStr += $" (+{group.Count() - 5} more)";
@@ -208,13 +209,30 @@ public class RenameSymbolTool
         return sb.ToString();
     }
 
-    private static string GetDisplayPath(string fullPath)
+    private static string GetDisplayPath(string fullPath, string? workspacePath)
     {
+        // If we have a workspace path, make the path relative to it
+        if (!string.IsNullOrEmpty(workspacePath))
+        {
+            var normalizedFull = fullPath.Replace('\\', '/');
+            var normalizedWorkspace = workspacePath.Replace('\\', '/').TrimEnd('/');
+
+            if (normalizedFull.StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedFull.Substring(normalizedWorkspace.Length + 1);
+            }
+        }
+
+        // Fallback patterns for common project structures
+        if (fullPath.Contains("Assets/"))
+            return fullPath.Substring(fullPath.IndexOf("Assets/"));
         if (fullPath.Contains("src/"))
             return fullPath.Substring(fullPath.IndexOf("src/") + 4);
         if (fullPath.Contains("tests/"))
             return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
-        return fullPath;
+
+        // Final fallback: just show filename
+        return System.IO.Path.GetFileName(fullPath);
     }
 
     private static string GetErrorHelpResponse(string message)

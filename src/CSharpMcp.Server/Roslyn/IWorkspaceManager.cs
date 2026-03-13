@@ -92,6 +92,11 @@ public interface IWorkspaceManager
     /// </summary>
     bool IsWorkspaceLoaded { get; }
 
+    /// <summary>
+    /// 获取工作区根路径（.sln 或 .csproj 所在目录）
+    /// </summary>
+    string? WorkspacePath { get; }
+
     Task<IEnumerable<ISymbol>> SearchSymbolsWithPatternAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
     Task<IEnumerable<ISymbol>> SearchSymbolsAsync(string query, SymbolFilter filter, CancellationToken cancellationToken);
 
