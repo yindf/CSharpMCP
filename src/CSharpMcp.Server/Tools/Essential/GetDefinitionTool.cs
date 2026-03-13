@@ -58,8 +58,35 @@ public class GetDefinitionTool
                 return GetErrorHelpResponse(errorDetails.ToString());
             }
 
+            var symbolsList = symbols.ToList();
+
+            // If filePath is provided, check if top match is from that file
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                var topSymbol = symbolsList.First();
+                var topSymbolPath = topSymbol.GetFilePath();
+                var targetFileName = System.IO.Path.GetFileName(filePath);
+
+                // Check if top symbol is in the target file (or a file with the same name)
+                if (!string.IsNullOrEmpty(topSymbolPath) &&
+                    topSymbolPath.Contains(targetFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Single best match found - return only this symbol
+                    logger.LogInformation("Resolved symbol from target file: {SymbolName}", topSymbol.Name);
+                    return await BuildSymbolMarkdownAsync(topSymbol, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
+                }
+            }
+
+            // Multiple ambiguous matches - show disambiguation list
+            if (symbolsList.Count > 1)
+            {
+                logger.LogInformation("Multiple symbols found for '{SymbolName}', showing disambiguation list", symbolName);
+                return BuildDisambiguationResponse(symbolsList, symbolName ?? "symbol");
+            }
+
+            // Single match - return it
             var sb = new StringBuilder();
-            foreach (var symbol in symbols)
+            foreach (var symbol in symbolsList)
             {
                 var result = await BuildSymbolMarkdownAsync(symbol, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
                 sb.AppendLine(result);
@@ -195,6 +222,59 @@ public class GetDefinitionTool
         catch
         {
         }
+
+        return sb.ToString();
+    }
+
+    private static string BuildDisambiguationResponse(List<ISymbol> symbols, string symbolName)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine($"## Multiple Symbols Found: `{symbolName}`");
+        sb.AppendLine();
+        sb.AppendLine($"Found {symbols.Count} symbols with this name. Please specify the file path and line number to disambiguate:");
+        sb.AppendLine();
+
+        var groupedByFile = symbols
+            .SelectMany(s => s.Locations.Select(loc => (Symbol: s, Location: loc)))
+            .Where(x => x.Location.IsInSource)
+            .GroupBy(x => x.Location.SourceTree?.FilePath ?? "unknown")
+            .OrderBy(g => g.Key);
+
+        foreach (var fileGroup in groupedByFile.Take(15))
+        {
+            var filePath = fileGroup.Key;
+            var displayPath = MarkdownHelper.GetDisplayPath(filePath, null);
+
+            sb.AppendLine($"### `{displayPath}`");
+
+            foreach (var (symbol, location) in fileGroup.Take(3))
+            {
+                var lineSpan = location.GetLineSpan();
+                var line = lineSpan.StartLinePosition.Line + 1;
+                var kind = symbol.GetDisplayKind();
+                var containingType = symbol.GetContainingTypeName();
+
+                var description = !string.IsNullOrEmpty(containingType)
+                    ? $"{kind} in `{containingType}`"
+                    : kind;
+
+                sb.AppendLine($"- L{line}: `{symbol.Name}` ({description})");
+            }
+
+            sb.AppendLine();
+        }
+
+        if (groupedByFile.Count() > 15)
+        {
+            sb.AppendLine($"*... and {groupedByFile.Count() - 15} more files*");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("**Tip**: Use `filePath` and `lineNumber` parameters to get a specific symbol:");
+        sb.AppendLine("```");
+        sb.AppendLine($"GetDefinition(symbolName: \"{symbolName}\", filePath: \"path/to/File.cs\", lineNumber: 42)");
+        sb.AppendLine("```");
 
         return sb.ToString();
     }
