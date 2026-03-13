@@ -132,6 +132,38 @@ public static class MarkdownHelper
     }
 
     /// <summary>
+    /// 获取显示路径（相对于工作区或常见项目结构）
+    /// </summary>
+    /// <param name="fullPath">完整文件路径</param>
+    /// <param name="workspacePath">工作区根路径（可选）</param>
+    /// <returns>相对路径或文件名</returns>
+    public static string GetDisplayPath(string fullPath, string? workspacePath)
+    {
+        // If we have a workspace path, make the path relative to it
+        if (!string.IsNullOrEmpty(workspacePath))
+        {
+            var normalizedFull = fullPath.Replace('\\', '/');
+            var normalizedWorkspace = workspacePath.Replace('\\', '/').TrimEnd('/');
+
+            if (normalizedFull.StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedFull.Substring(normalizedWorkspace.Length + 1);
+            }
+        }
+
+        // Fallback patterns for common project structures
+        if (fullPath.Contains("Assets/"))
+            return fullPath.Substring(fullPath.IndexOf("Assets/"));
+        if (fullPath.Contains("src/"))
+            return fullPath.Substring(fullPath.IndexOf("src/") + 4);
+        if (fullPath.Contains("tests/"))
+            return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
+
+        // Final fallback: just show filename
+        return Path.GetFileName(fullPath);
+    }
+
+    /// <summary>
     /// 格式化文件位置为 markdown（紧凑格式）
     /// </summary>
     public static string FormatFileLocationCompact(string? filePath, int lineNumber)

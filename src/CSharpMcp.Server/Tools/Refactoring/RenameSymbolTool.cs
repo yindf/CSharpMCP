@@ -210,30 +210,7 @@ public class RenameSymbolTool
     }
 
     private static string GetDisplayPath(string fullPath, string? workspacePath)
-    {
-        // If we have a workspace path, make the path relative to it
-        if (!string.IsNullOrEmpty(workspacePath))
-        {
-            var normalizedFull = fullPath.Replace('\\', '/');
-            var normalizedWorkspace = workspacePath.Replace('\\', '/').TrimEnd('/');
-
-            if (normalizedFull.StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                return normalizedFull.Substring(normalizedWorkspace.Length + 1);
-            }
-        }
-
-        // Fallback patterns for common project structures
-        if (fullPath.Contains("Assets/"))
-            return fullPath.Substring(fullPath.IndexOf("Assets/"));
-        if (fullPath.Contains("src/"))
-            return fullPath.Substring(fullPath.IndexOf("src/") + 4);
-        if (fullPath.Contains("tests/"))
-            return fullPath.Substring(fullPath.IndexOf("tests/") + 6);
-
-        // Final fallback: just show filename
-        return System.IO.Path.GetFileName(fullPath);
-    }
+        => MarkdownHelper.GetDisplayPath(fullPath, workspacePath);
 
     private static string GetErrorHelpResponse(string message)
     {
