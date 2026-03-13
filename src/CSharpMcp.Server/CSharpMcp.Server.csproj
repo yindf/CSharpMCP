@@ -23,6 +23,9 @@
     <PackageReference Include="Microsoft.CodeAnalysis" Version="4.13.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="4.13.0" />
+    <!-- Buildalyzer for workspace loading -->
+    <PackageReference Include="Buildalyzer" Version="8.0.0" />
+    <PackageReference Include="Buildalyzer.Workspaces" Version="8.0.0" />
     <!-- Logging -->
     <PackageReference Include="Serilog" Version="4.2.0" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="9.0.0" />

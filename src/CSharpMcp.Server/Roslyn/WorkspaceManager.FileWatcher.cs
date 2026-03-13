@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace CSharpMcp.Server.Roslyn;
@@ -25,6 +26,20 @@ internal sealed partial class WorkspaceManager
                 solutionDirectory!,
                 _logger
             );
+
+            // Handle incremental document updates
+            _fileWatcher.DocumentsUpdated += async (sender, e) =>
+            {
+                _logger.LogInformation("Processing {Count} changed documents", e.Files.Count);
+                await UpdateDocumentsAsync(e.Files, CancellationToken.None);
+            };
+
+            // Handle project reloads
+            _fileWatcher.ProjectReloadNeeded += async (sender, e) =>
+            {
+                _logger.LogInformation("Project reload needed: {Path}", e.ProjectPath);
+                await ReloadProjectAsync(e.ProjectPath, CancellationToken.None);
+            };
 
             _logger.LogInformation("File watcher started for: {Path}", _loadedPath);
         }

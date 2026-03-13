@@ -17,12 +17,15 @@ namespace CSharpMcp.Server.Tools.Optimization;
 [McpServerToolType]
 public class GetDiagnosticsTool
 {
+    public const int DefaultMaxResults = 50;
+
     [McpServerTool, Description("Get compiler diagnostics (errors, warnings, info) for files or the entire workspace")]
     public static async Task<string> GetDiagnostics(
         IWorkspaceManager workspaceManager,
         ILogger<GetDiagnosticsTool> logger,
         CancellationToken cancellationToken,
         [Description("Path to specific file to check (null = entire workspace)")] string filePath = null,
+        [Description("Maximum number of diagnostics to return per severity level (default 50)")] int maxResults = DefaultMaxResults,
         [Description("Whether to include warnings in output")] bool includeWarnings = true,
         [Description("Whether to include info messages in output")] bool includeInfo = false,
         [Description("Whether to include hidden diagnostics")] bool includeHidden = false)
@@ -111,7 +114,10 @@ public class GetDiagnosticsTool
             logger.LogInformation("Retrieved {Count} diagnostics: {Errors} errors, {Warnings} warnings",
                 diagnostics.Count, totalErrors, totalWarnings);
 
-            var result = new GetDiagnosticsResponse(summary, diagnostics).ToMarkdown();
+            // Limit diagnostics per severity level to avoid huge output
+            var limitedDiagnostics = LimitDiagnostics(diagnostics, maxResults, out var hasMore);
+
+            var result = new GetDiagnosticsResponse(summary, limitedDiagnostics, hasMore).ToMarkdown();
 
             // 检查是否需要显示 Unity 刷新提示
             var unityHint = workspaceManager.GetUnityRefreshHint();
@@ -245,5 +251,54 @@ public class GetDiagnosticsTool
             Microsoft.CodeAnalysis.DiagnosticSeverity.Hidden => Models.Tools.DiagnosticSeverity.Hidden,
             _ => Models.Tools.DiagnosticSeverity.Info
         };
+    }
+
+    /// <summary>
+    /// Limit diagnostics per severity level to avoid huge output
+    /// </summary>
+    private static List<DiagnosticItem> LimitDiagnostics(
+        List<DiagnosticItem> diagnostics,
+        int maxResults,
+        out Dictionary<string, int> hasMore)
+    {
+        hasMore = new Dictionary<string, int>();
+
+        var result = new List<DiagnosticItem>();
+
+        var errors = diagnostics.Where(d => d.Severity == Models.Tools.DiagnosticSeverity.Error).ToList();
+        var warnings = diagnostics.Where(d => d.Severity == Models.Tools.DiagnosticSeverity.Warning).ToList();
+        var infos = diagnostics.Where(d => d.Severity == Models.Tools.DiagnosticSeverity.Info).ToList();
+
+        if (errors.Count > maxResults)
+        {
+            hasMore["errors"] = errors.Count - maxResults;
+            result.AddRange(errors.Take(maxResults));
+        }
+        else
+        {
+            result.AddRange(errors);
+        }
+
+        if (warnings.Count > maxResults)
+        {
+            hasMore["warnings"] = warnings.Count - maxResults;
+            result.AddRange(warnings.Take(maxResults));
+        }
+        else
+        {
+            result.AddRange(warnings);
+        }
+
+        if (infos.Count > maxResults)
+        {
+            hasMore["info"] = infos.Count - maxResults;
+            result.AddRange(infos.Take(maxResults));
+        }
+        else
+        {
+            result.AddRange(infos);
+        }
+
+        return result;
     }
 }

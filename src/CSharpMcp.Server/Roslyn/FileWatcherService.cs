@@ -1,22 +1,32 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace CSharpMcp.Server.Roslyn;
 
 /// <summary>
 /// 文件监控服务 - 使用 FileSystemWatcher 监控解决方案目录
-/// 只收集文件变化，不进行增量编译。工具调用时通过 ForceRecompileAsync 完全重新编译。
+/// 支持防抖处理，区分项目重载和文档增量更新
 /// </summary>
 internal sealed class FileWatcherService : IDisposable
 {
     private readonly FileSystemWatcher _watcher;
     private readonly string _solutionDirectory;
     private readonly ILogger _logger;
-    private readonly object _pendingChangesLock = new();
 
+    // Debounced change processing (large capacity for git checkout scenarios)
+    private readonly BlockingCollection<FileChangeEventArgs> _changeQueue = new(boundedCapacity: 10000);
+    private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly TimeSpan _debounceDelay = TimeSpan.FromMilliseconds(300);
+    private readonly Task _processorTask;
+
+    // Change tracking (for backward compatibility)
+    private readonly object _pendingChangesLock = new();
     private readonly Dictionary<string, FileChangeType> _pendingFileChanges = new();
     private bool _disposed;
 
@@ -28,6 +38,16 @@ internal sealed class FileWatcherService : IDisposable
     private volatile bool _needsUnityRefresh;
     private readonly List<string> _unityRefreshReasons = new();
     private readonly object _unityRefreshLock = new();
+
+    /// <summary>
+    /// Fired when a project file (.csproj/.sln) changes and needs reload
+    /// </summary>
+    public event EventHandler<ProjectReloadNeededEventArgs>? ProjectReloadNeeded;
+
+    /// <summary>
+    /// Fired when source files (.cs) are updated and can be incrementally applied
+    /// </summary>
+    public event EventHandler<DocumentsUpdatedEventArgs>? DocumentsUpdated;
 
     public FileWatcherService(
         string solutionPath,
@@ -46,32 +66,69 @@ internal sealed class FileWatcherService : IDisposable
 
         // 注册事件处理器
         _watcher.Changed += OnFileChanged;
+        _watcher.Created += OnFileChanged;
         _watcher.Deleted += OnFileChanged;
         _watcher.Renamed += OnFileRenamed;
 
         _watcher.EnableRaisingEvents = true;
 
+        // Start background processor for debounced changes
+        _processorTask = Task.Run(() => ProcessChangesAsync(_shutdownCts.Token));
+
         _logger.LogInformation("FileWatcherService initialized for: {Directory}", _solutionDirectory);
-        _logger.LogInformation("Watching: *.sln, *.csproj, *.cs (incremental compilation disabled)");
+        _logger.LogInformation("Watching: *.sln, *.csproj, *.cs with debounced processing");
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        var changeType = GetChangeType(e.FullPath);
-        if (!changeType.HasValue) return;
+        if (!IsValidFile(e.FullPath, out var changeType)) return;
 
-        _logger.LogTrace("File changed: {Type} - {Path}", changeType.Value, e.FullPath);
+        _logger.LogTrace("File changed: {Type} - {Path}", changeType, e.FullPath);
+
+        // Queue for debounced processing
+        if (!_changeQueue.TryAdd(new FileChangeEventArgs(e.FullPath, changeType.Value, e.ChangeType), 0))
+        {
+            _logger.LogWarning("Change queue full, dropping change: {Path}", e.FullPath);
+        }
+
+        // Also record for backward compatibility
         RecordChange(changeType.Value, e.FullPath);
     }
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        var changeType = GetChangeType(e.FullPath);
-        if (changeType.HasValue)
+        if (!IsValidFile(e.FullPath, out var changeType)) return;
+
+        _logger.LogTrace("File renamed: {Type} - {OldPath} -> {NewPath}", changeType, e.OldFullPath, e.FullPath);
+
+        // Queue for debounced processing
+        if (!_changeQueue.TryAdd(new FileChangeEventArgs(e.FullPath, changeType.Value, e.ChangeType), 0))
         {
-            _logger.LogTrace("File renamed: {Type} - {OldPath} -> {NewPath}", changeType.Value, e.OldFullPath, e.FullPath);
-            RecordChange(changeType.Value, e.FullPath);
+            _logger.LogWarning("Change queue full, dropping change: {Path}", e.FullPath);
         }
+
+        // Also record for backward compatibility
+        RecordChange(changeType.Value, e.FullPath);
+    }
+
+    /// <summary>
+    /// Check if file is valid for watching (not temp file, correct extension)
+    /// </summary>
+    private bool IsValidFile(string filePath, out FileChangeType? changeType)
+    {
+        changeType = GetChangeType(filePath);
+        if (!changeType.HasValue) return false;
+
+        // Filter out temp files
+        var fileName = Path.GetFileName(filePath);
+        if (fileName.StartsWith("~", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("~RF", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetExtension(fileName).Length > 4) // Skip temp files with long extensions
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -91,7 +148,7 @@ internal sealed class FileWatcherService : IDisposable
     }
 
     /// <summary>
-    /// 记录文件变化
+    /// 记录文件变化 (for backward compatibility)
     /// </summary>
     private void RecordChange(FileChangeType changeType, string filePath)
     {
@@ -101,6 +158,73 @@ internal sealed class FileWatcherService : IDisposable
         }
 
         _logger.LogDebug("File change recorded: {Type} - {Path}", changeType, filePath);
+    }
+
+    /// <summary>
+    /// Background processor for debounced file changes
+    /// </summary>
+    private async Task ProcessChangesAsync(CancellationToken cancellationToken)
+    {
+        var pendingChanges = new Dictionary<string, (FileChangeType Type, DateTime Time)>();
+        var lastProcessTime = DateTime.UtcNow;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                // Try to take from queue with timeout
+                if (_changeQueue.TryTake(out var change, 100, cancellationToken))
+                {
+                    pendingChanges[change.FilePath] = (change.ChangeType, DateTime.UtcNow);
+                }
+
+                // Check if we should process pending changes
+                if (pendingChanges.Count > 0)
+                {
+                    var now = DateTime.UtcNow;
+                    var oldest = pendingChanges.Values.Min(v => v.Time);
+
+                    if (now - oldest >= _debounceDelay)
+                    {
+                        var filesToProcess = pendingChanges.ToList();
+                        pendingChanges.Clear();
+
+                        // Separate .cs and .csproj/.sln changes
+                        var csFiles = filesToProcess
+                            .Where(f => f.Value.Type == FileChangeType.SourceFile)
+                            .Select(f => f.Key)
+                            .ToList();
+                        var projectFiles = filesToProcess
+                            .Where(f => f.Value.Type == FileChangeType.Project || f.Value.Type == FileChangeType.Solution)
+                            .Select(f => f.Key)
+                            .ToList();
+
+                        // Process .csproj/.sln changes first (project reload)
+                        foreach (var projectFile in projectFiles)
+                        {
+                            _logger.LogInformation("Project reload needed: {Path}", projectFile);
+                            ProjectReloadNeeded?.Invoke(this, new ProjectReloadNeededEventArgs(projectFile));
+                            MarkNeedsReload();
+                        }
+
+                        // Process .cs changes (incremental document update)
+                        if (csFiles.Any())
+                        {
+                            _logger.LogInformation("Documents updated: {Count} files", csFiles.Count);
+                            DocumentsUpdated?.Invoke(this, new DocumentsUpdatedEventArgs(csFiles));
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing file changes");
+            }
+        }
     }
 
     /// <summary>
@@ -212,6 +336,11 @@ internal sealed class FileWatcherService : IDisposable
 
         try
         {
+            // Signal shutdown and wait for processor task
+            _shutdownCts.Cancel();
+            _processorTask.Wait(TimeSpan.FromSeconds(2));
+            _shutdownCts.Dispose();
+
             _watcher.EnableRaisingEvents = false;
             _watcher.Dispose();
         }
@@ -223,3 +352,18 @@ internal sealed class FileWatcherService : IDisposable
         _logger.LogInformation("FileWatcherService disposed");
     }
 }
+
+/// <summary>
+/// Event args for file changes
+/// </summary>
+public record FileChangeEventArgs(string FilePath, FileChangeType ChangeType, WatcherChangeTypes WatcherChangeType);
+
+/// <summary>
+/// Event args for project reload
+/// </summary>
+public record ProjectReloadNeededEventArgs(string ProjectPath);
+
+/// <summary>
+/// Event args for document updates
+/// </summary>
+public record DocumentsUpdatedEventArgs(IReadOnlyList<string> Files);

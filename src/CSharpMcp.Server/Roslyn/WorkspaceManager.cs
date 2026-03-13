@@ -1,31 +1,38 @@
-﻿using System;
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Buildalyzer;
+using Buildalyzer.Workspaces;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.FindSymbols;
-using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging;
 
 namespace CSharpMcp.Server.Roslyn;
 
 /// <summary>
-/// 工作区管理器实现
+/// 工作区管理器实现 - 使用 Buildalyzer + AdhocWorkspace
 /// </summary>
 internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
 {
     private readonly ILogger<WorkspaceManager> _logger;
-    private readonly MSBuildWorkspace _workspace;
     private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private AdhocWorkspace? _workspace;
+    private AnalyzerManager? _manager;
     private Solution? _currentSolution;
-    private IEnumerable<Project> _userProjects;
+    private IEnumerable<Project>? _userProjects;
     private string? _loadedPath;
     private DateTime _lastUpdate;
     private FileWatcherService? _fileWatcher;
-    private int _isCompiling;
     private bool _isUnityProject;
+
+    // File-to-project mapping for fast incremental updates
+    private readonly ConcurrentDictionary<string, ProjectId> _fileToProjectMap = new();
 
     // 已删除文件跟踪
     private readonly HashSet<string> _deletedFilePaths = new(StringComparer.OrdinalIgnoreCase);
@@ -47,12 +54,6 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     public WorkspaceManager(ILogger<WorkspaceManager> logger)
     {
         _logger = logger;
-        _workspace = MSBuildWorkspace.Create();
-
-        _workspace.WorkspaceFailed += (s, e) =>
-        {
-            _logger.LogWarning("Workspace failed: {Diagnostic}", e.Diagnostic.Message);
-        };
     }
 
     /// <summary>
@@ -75,10 +76,13 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
             {
                 _logger.LogInformation("Closing current workspace to reload");
                 StopFileWatcher();
-                _workspace.CloseSolution();
+                _workspace?.Dispose();
+                _workspace = null;
+                _manager = null;
                 _currentSolution = null;
                 _loadedPath = null;
                 _userProjects = null;
+                _fileToProjectMap.Clear();
                 lock (_deletedFilesLock)
                 {
                     _deletedFilePaths.Clear();
@@ -126,63 +130,45 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
                 throw new FileNotFoundException($"Path not found: {path}");
             }
 
-            var extension = Path.GetExtension(path).ToLowerInvariant();
-            WorkspaceKind kind;
-
-            // Normalize the path to use full path
             var normalizedPath = Path.GetFullPath(path);
-            _logger.LogInformation("Opening {Extension} file: {Path}", extension, normalizedPath);
+            _logger.LogInformation("Opening workspace file: {Path}", normalizedPath);
 
-            if (extension == ".sln" || extension == ".slnx")
+            try
             {
-                try
-                {
-                    _currentSolution = await _workspace.OpenSolutionAsync(normalizedPath, cancellationToken: cancellationToken);
-                    kind = WorkspaceKind.Solution;
-                    _isUnityProject = await IsUnityProjectAsync(_workspace.CurrentSolution.Projects, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to open solution: {Path}", normalizedPath);
-                    throw new InvalidOperationException($"Failed to open solution file: {normalizedPath}. Error: {ex.Message}", ex);
-                }
+                // Use Buildalyzer to create workspace
+                (_workspace, _manager) = await BuildalyzerWorkspaceFactory.CreateWorkspaceAsync(
+                    normalizedPath,
+                    _logger,
+                    cancellationToken);
+
+                _currentSolution = _workspace.CurrentSolution;
+                _isUnityProject = await IsUnityProjectAsync(_currentSolution.Projects, cancellationToken);
             }
-            else if (extension == ".csproj")
+            catch (Exception ex)
             {
-                try
-                {
-                    var project = await _workspace.OpenProjectAsync(normalizedPath, cancellationToken: cancellationToken);
-                    _currentSolution = project.Solution;
-                    kind = WorkspaceKind.Project;
-                    _isUnityProject = await IsUnityProjectAsync(new[] { project }, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to open project: {Path}", normalizedPath);
-                    throw new InvalidOperationException($"Failed to open project file: {normalizedPath}. Error: {ex.Message}", ex);
-                }
-            }
-            else
-            {
-                throw new NotSupportedException($"Unsupported file type: {extension}");
+                _logger.LogError(ex, "Failed to create Buildalyzer workspace: {Path}", normalizedPath);
+                throw new InvalidOperationException($"Failed to open workspace file: {normalizedPath}. Error: {ex.Message}", ex);
             }
 
-            _loadedPath = Path.GetFullPath(path);
+            _loadedPath = normalizedPath;
             _lastUpdate = DateTime.UtcNow;
+
+            // Build file-to-project mapping for incremental updates
+            BuildFileToProjectMap();
 
             // Start file watcher for automatic workspace updates
             StartFileWatcher();
 
             var info = new WorkspaceInfo(
                 _loadedPath,
-                kind,
+                DetermineWorkspaceKind(normalizedPath),
                 _currentSolution.Projects.Count(),
                 _currentSolution.Projects.Sum(p => p.DocumentIds.Count)
             );
 
             _logger.LogInformation(
                 "Workspace loaded: {Kind} with {ProjectCount} projects and {DocumentCount} documents",
-                kind,
+                info.Kind,
                 info.ProjectCount,
                 info.DocumentCount
             );
@@ -193,6 +179,17 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         {
             _loadLock.Release();
         }
+    }
+
+    private static WorkspaceKind DetermineWorkspaceKind(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".sln" or ".slnx" => WorkspaceKind.Solution,
+            ".csproj" => WorkspaceKind.Project,
+            _ => WorkspaceKind.Folder
+        };
     }
 
     /// <summary>
@@ -257,7 +254,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         }
 
         // Try exact path match first
-        var documentIds = _currentSolution.GetDocumentIdsWithFilePath(filePath);
+        var documentIds = _currentSolution!.GetDocumentIdsWithFilePath(filePath);
         if (documentIds.Any())
         {
             return _currentSolution.GetDocument(documentIds.First());
@@ -327,7 +324,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         if (string.IsNullOrEmpty(projectPath))
         {
             // Get the first project that can compile
-            project = _currentSolution.Projects.FirstOrDefault(p =>
+            project = _currentSolution!.Projects.FirstOrDefault(p =>
             {
                 try
                 {
@@ -348,7 +345,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         else
         {
             // Find specific project
-            project = _currentSolution.Projects.FirstOrDefault(p =>
+            project = _currentSolution!.Projects.FirstOrDefault(p =>
                 string.Equals(p.FilePath, projectPath, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(
                     Path.GetFileName(p.FilePath),
@@ -404,12 +401,17 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
 
     private IEnumerable<Project> GetUserProjects()
     {
-        if (!_isUnityProject)
+        if (_currentSolution == null)
         {
-            return _workspace.CurrentSolution.Projects;
+            return [];
         }
 
-        return _workspace.CurrentSolution.Projects
+        if (!_isUnityProject)
+        {
+            return _currentSolution.Projects;
+        }
+
+        return _currentSolution.Projects
             .Where(p =>
             {
                 var doc = p.Documents.FirstOrDefault();
@@ -454,7 +456,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// <summary>
     /// 获取源文本
     /// </summary>
-    public async Task<Microsoft.CodeAnalysis.Text.SourceText?> GetSourceTextAsync(string filePath, CancellationToken cancellationToken = default)
+    public async Task<SourceText?> GetSourceTextAsync(string filePath, CancellationToken cancellationToken = default)
     {
         var document = await GetDocumentAsync(filePath, cancellationToken);
         if (document == null)
@@ -521,7 +523,6 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     public async Task EnsureRefreshAsync(CancellationToken cancellationToken = default)
     {
         // 如果有待处理的文件变更或需要重新加载，直接强制重新编译
-        // 跳过增量更新，因为 ForceRecompileAsync 会从磁盘重新加载所有文件
         if (_fileWatcher?.HasPendingChanges == true || _fileWatcher?.NeedsWorkspaceReload == true)
         {
             _logger.LogInformation("Forcing full recompile for accurate diagnostics...");
@@ -538,6 +539,60 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     public void ClearUnityRefreshHint()
     {
         _fileWatcher?.ClearUnityRefresh();
+    }
+
+    /// <summary>
+    /// 应用 Solution 变更到工作区并持久化到磁盘
+    /// 用于重构工具（如 RenameSymbol）完成后保存更改
+    /// </summary>
+    public async Task<ApplyChangesResult> ApplyChangesAsync(Solution newSolution, CancellationToken cancellationToken = default)
+    {
+        if (_workspace == null || _currentSolution == null)
+        {
+            return new ApplyChangesResult(false, [], "Workspace not loaded");
+        }
+
+        // Get changed documents before applying (compare old vs new)
+        var changes = newSolution.GetChanges(_currentSolution);
+        var changedDocIds = changes
+            .GetProjectChanges()
+            .SelectMany(p => p.GetChangedDocuments())
+            .ToList();
+        var changedFiles = new List<string>();
+
+        _logger.LogInformation("Applying solution changes: {Count} documents changed", changedDocIds.Count);
+
+        // Persist to disk - get text from NEW solution, not from workspace after applying
+        foreach (var docId in changedDocIds)
+        {
+            // Get document from the NEW solution (which has the updated content)
+            var doc = newSolution.GetDocument(docId);
+            if (doc?.FilePath == null) continue;
+
+            try
+            {
+                var text = await doc.GetTextAsync(cancellationToken);
+                await File.WriteAllTextAsync(doc.FilePath, text.ToString(), cancellationToken);
+                changedFiles.Add(doc.FilePath);
+                _logger.LogDebug("Saved changed file: {FilePath}", doc.FilePath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to save file: {FilePath}", doc.FilePath);
+            }
+        }
+
+        // Apply to workspace after persisting to disk
+        if (!_workspace.TryApplyChanges(newSolution))
+        {
+            return new ApplyChangesResult(false, [], "Failed to apply changes to workspace");
+        }
+
+        _currentSolution = _workspace.CurrentSolution;
+
+        _logger.LogInformation("Solution changes applied and saved: {Count} files", changedFiles.Count);
+
+        return new ApplyChangesResult(true, changedFiles);
     }
 
     /// <summary>
@@ -567,7 +622,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
     /// </summary>
     public async Task ForceRecompileAsync(CancellationToken cancellationToken)
     {
-        if (_currentSolution == null)
+        if (_currentSolution == null || string.IsNullOrEmpty(_loadedPath))
         {
             return;
         }
@@ -578,17 +633,15 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         {
             // 通过重新加载解决方案来强制重新编译
             var originalPath = _loadedPath;
-            if (!string.IsNullOrEmpty(originalPath))
-            {
-                // 保存当前加载的路径
-                _loadedPath = null;
-                _currentSolution = null;
 
-                // 重新加载
-                await LoadAsync(originalPath, cancellationToken);
+            // 保存当前加载的路径
+            _loadedPath = null;
+            _currentSolution = null;
 
-                _logger.LogInformation("Force recompile completed");
-            }
+            // 重新加载
+            await LoadAsync(originalPath!, cancellationToken);
+
+            _logger.LogInformation("Force recompile completed");
         }
         catch (Exception ex)
         {
@@ -622,10 +675,236 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         return false;
     }
 
+    #region Incremental Updates
+
+    /// <summary>
+    /// Build file-to-project mapping after workspace load
+    /// </summary>
+    private void BuildFileToProjectMap()
+    {
+        _fileToProjectMap.Clear();
+
+        if (_currentSolution == null) return;
+
+        foreach (var project in _currentSolution.Projects)
+        {
+            foreach (var document in project.Documents)
+            {
+                if (document.FilePath != null)
+                {
+                    _fileToProjectMap[document.FilePath] = project.Id;
+                }
+            }
+        }
+
+        _logger.LogInformation("File-to-project mapping built: {Count} files", _fileToProjectMap.Count);
+    }
+
+    /// <summary>
+    /// Update mapping for a single project
+    /// </summary>
+    private void UpdateFileToProjectMapping(ProjectId projectId)
+    {
+        if (_currentSolution == null) return;
+
+        var project = _currentSolution.GetProject(projectId);
+        if (project == null) return;
+
+        // Remove old entries for this project
+        foreach (var kvp in _fileToProjectMap.Where(kvp => kvp.Value == projectId).ToList())
+        {
+            _fileToProjectMap.TryRemove(kvp.Key, out _);
+        }
+
+        // Add new entries
+        foreach (var document in project.Documents)
+        {
+            if (document.FilePath != null)
+            {
+                _fileToProjectMap[document.FilePath] = project.Id;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reload a single project in-place, preserving ProjectId and cross-project references
+    /// </summary>
+    public async Task<bool> ReloadProjectAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        if (_currentSolution == null || _manager == null || _workspace == null) return false;
+
+        var projectAnalyzer = BuildalyzerWorkspaceFactory.GetProjectAnalyzer(_manager, projectPath);
+        if (projectAnalyzer == null)
+        {
+            _logger.LogWarning("Project analyzer not found for: {ProjectPath}", projectPath);
+            return false;
+        }
+
+        // Rebuild project with Buildalyzer
+        IAnalyzerResult? newResult;
+        try
+        {
+            newResult = projectAnalyzer.Build().FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to rebuild project: {ProjectPath}", projectPath);
+            return false;
+        }
+
+        if (newResult == null)
+        {
+            _logger.LogWarning("Build result is null for: {ProjectPath}", projectPath);
+            return false;
+        }
+
+        // Find existing project (keep ProjectId!)
+        var oldProject = _currentSolution.Projects
+            .FirstOrDefault(p => string.Equals(p.FilePath, projectPath, StringComparison.OrdinalIgnoreCase));
+
+        if (oldProject == null)
+        {
+            _logger.LogWarning("Project not found in solution: {ProjectPath}", projectPath);
+            return false;
+        }
+
+        _logger.LogInformation("Reloading project in-place: {ProjectName}", oldProject.Name);
+
+        // Build new solution with updated project
+        var newSolution = _currentSolution;
+
+        // Update metadata references
+        var metadataRefs = newResult.References
+            .Select(r => MetadataReference.CreateFromFile(r))
+            .ToList();
+
+        newSolution = newSolution.WithProjectMetadataReferences(oldProject.Id, metadataRefs);
+
+        // Keep existing compilation options (they rarely change during reload)
+        // For Unity projects, AllowUnsafe should already be set from initial load
+
+        // Update documents - remove old ones first
+        foreach (var doc in oldProject.DocumentIds.ToList())
+        {
+            newSolution = newSolution.RemoveDocument(doc);
+        }
+
+        // Add new documents
+        foreach (var sourceFile in newResult.SourceFiles)
+        {
+            var sourceText = await ReadFileWithRetryAsync(sourceFile);
+            if (sourceText == null) continue;
+
+            var docId = DocumentId.CreateNewId(oldProject.Id);
+            newSolution = newSolution.AddDocument(
+                docId,
+                Path.GetFileName(sourceFile),
+                sourceText,
+                filePath: sourceFile);
+        }
+
+        // Apply changes - same ProjectId, cross-project references preserved!
+        if (_workspace.TryApplyChanges(newSolution))
+        {
+            _currentSolution = _workspace.CurrentSolution;
+
+            // Update file-to-project mapping for this project
+            UpdateFileToProjectMapping(oldProject.Id);
+
+            _logger.LogInformation("Project reloaded successfully: {ProjectName}", oldProject.Name);
+            return true;
+        }
+
+        _logger.LogWarning("Failed to apply changes for project: {ProjectName}", oldProject.Name);
+        return false;
+    }
+
+    /// <summary>
+    /// Incremental update for changed .cs files
+    /// </summary>
+    public async Task<bool> UpdateDocumentsAsync(IEnumerable<string> changedFiles, CancellationToken cancellationToken)
+    {
+        if (_currentSolution == null || _workspace == null) return false;
+
+        var filesByProject = changedFiles
+            .Where(f => _fileToProjectMap.TryGetValue(f, out _))
+            .GroupBy(f => _fileToProjectMap[f])
+            .ToList();
+
+        if (!filesByProject.Any())
+        {
+            _logger.LogDebug("No tracked files in change set");
+            return false;
+        }
+
+        var newSolution = _currentSolution;
+
+        foreach (var group in filesByProject)
+        {
+            var projectId = group.Key;
+            var project = newSolution.GetProject(projectId);
+            if (project == null) continue;
+
+            foreach (var filePath in group)
+            {
+                var document = project.Documents.FirstOrDefault(d =>
+                    string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+
+                if (document == null) continue;
+
+                var sourceText = await ReadFileWithRetryAsync(filePath);
+                if (sourceText == null) continue;
+
+                newSolution = newSolution.WithDocumentText(document.Id, sourceText);
+                _logger.LogDebug("Updated document: {FilePath}", filePath);
+            }
+        }
+
+        if (newSolution != _currentSolution)
+        {
+            if (_workspace.TryApplyChanges(newSolution))
+            {
+                _currentSolution = _workspace.CurrentSolution;
+                _logger.LogInformation("Incremental document update completed: {Count} files", changedFiles.Count());
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Read file with retry for editor-locked files
+    /// </summary>
+    private static async Task<SourceText?> ReadFileWithRetryAsync(string filePath)
+    {
+        for (int i = 0; i < 5; i++)
+        {
+            try
+            {
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                var content = await reader.ReadToEndAsync();
+                return SourceText.From(content);
+            }
+            catch (IOException) when (i < 4)
+            {
+                await Task.Delay(50 * (i + 1));
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    #endregion
+
     public void Dispose()
     {
         StopFileWatcher();
         _loadLock.Dispose();
-        _workspace.Dispose();
+        _workspace?.Dispose();
     }
 }

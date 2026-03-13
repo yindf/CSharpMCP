@@ -116,4 +116,19 @@ public interface IWorkspaceManager
     /// 这确保返回的诊断信息是基于完整编译的结果，而不是增量更新
     /// </summary>
     Task EnsureRefreshAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 应用 Solution 变更到工作区并持久化到磁盘
+    /// 用于重构工具（如 RenameSymbol）完成后保存更改
+    /// </summary>
+    Task<ApplyChangesResult> ApplyChangesAsync(Solution newSolution, CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// 应用变更的结果
+/// </summary>
+public record ApplyChangesResult(
+    bool Success,
+    IReadOnlyList<string> ChangedFiles,
+    string? ErrorMessage = null
+);

@@ -82,7 +82,8 @@ public record DiagnosticsSummary(
 
 public record GetDiagnosticsResponse(
     DiagnosticsSummary Summary,
-    IReadOnlyList<DiagnosticItem> Diagnostics
+    IReadOnlyList<DiagnosticItem> Diagnostics,
+    Dictionary<string, int>? HasMore = null
 ) : ToolResponse
 {
     public override string ToMarkdown()
@@ -98,6 +99,21 @@ public record GetDiagnosticsResponse(
         sb.AppendLine($"- Info: {Summary.TotalInfo}");
         sb.AppendLine($"- Files affected: {Summary.FilesWithDiagnostics}");
         sb.AppendLine();
+
+        // Show if there are more results
+        if (HasMore != null && HasMore.Count > 0)
+        {
+            sb.AppendLine("> **Note**: Output limited. ");
+            var notes = new List<string>();
+            if (HasMore.TryGetValue("errors", out var moreErrors))
+                notes.Add($"{moreErrors} more errors");
+            if (HasMore.TryGetValue("warnings", out var moreWarnings))
+                notes.Add($"{moreWarnings} more warnings");
+            if (HasMore.TryGetValue("info", out var moreInfo))
+                notes.Add($"{moreInfo} more info");
+            sb.AppendLine($"> {string.Join(", ", notes)} not shown. Increase `maxResults` to see more.");
+            sb.AppendLine();
+        }
 
         // Group by file
         var grouped = Diagnostics.GroupBy(d => d.FilePath);
