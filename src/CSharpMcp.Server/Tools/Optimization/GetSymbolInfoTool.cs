@@ -64,13 +64,13 @@ public class GetSymbolInfoTool
             if (allSymbols.Count > 1 && !parsedKind.HasValue)
             {
                 // Prefer types (classes, interfaces) over members (fields, methods)
-                symbol = allSymbols.FirstOrDefault(s => s is INamedTypeSymbol)
-                      ?? allSymbols.FirstOrDefault(s => s is IMethodSymbol or IPropertySymbol)
-                      ?? allSymbols.First();
+                symbol = allSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol)?.Symbol
+                      ?? allSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol or IPropertySymbol)?.Symbol
+                      ?? allSymbols.First().Symbol;
 
                 // If we had to make a choice, show disambiguation info
                 // Use SymbolEqualityComparer for proper symbol comparison
-                if (!SymbolEqualityComparer.Default.Equals(symbol, allSymbols.First()) || allSymbols.Count(s => s.Kind == symbol.Kind) > 1)
+                if (!SymbolEqualityComparer.Default.Equals(symbol, allSymbols.First().Symbol) || allSymbols.Count(rs => rs.Symbol.Kind == symbol.Kind) > 1)
                 {
                     logger.LogInformation("Multiple symbols found for {SymbolName}, showing disambiguation", symbolName);
                     return BuildDisambiguationResponse(symbolName, allSymbols);
@@ -78,11 +78,12 @@ public class GetSymbolInfoTool
             }
             else
             {
-                symbol = allSymbols.First();
+                symbol = allSymbols.First().Symbol;
             }
 
             var result = await BuildCompleteMarkdownAsync(
                 symbol,
+                allSymbols.First(),  // Pass resolved symbol for correct location
                 maxBodyLines,
                 maxReferences,
                 maxCallGraph,
@@ -119,26 +120,27 @@ public class GetSymbolInfoTool
         };
     }
 
-    private static string BuildDisambiguationResponse(string symbolName, IReadOnlyList<ISymbol> symbols)
+    private static string BuildDisambiguationResponse(string symbolName, IReadOnlyList<ResolvedSymbol> resolvedSymbols)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Multiple Symbols Found for `{symbolName}`");
         sb.AppendLine();
-        sb.AppendLine($"Found {symbols.Count} symbols matching this name. Please specify which one:");
+        sb.AppendLine($"Found {resolvedSymbols.Count} symbols matching this name. Please specify which one:");
         sb.AppendLine();
 
         // Group by kind
-        var byKind = symbols.GroupBy(s => s.Kind).OrderByDescending(g => g.Count());
+        var byKind = resolvedSymbols.GroupBy(rs => rs.Symbol.Kind).OrderByDescending(g => g.Count());
 
         foreach (var group in byKind)
         {
             sb.AppendLine($"## {group.Key}s ({group.Count()})");
             sb.AppendLine();
 
-            foreach (var sym in group.Take(10))
+            foreach (var resolved in group.Take(10))
             {
-                var (startLine, _) = sym.GetLineRange();
-                var filePath = sym.GetFilePath();
+                var sym = resolved.Symbol;
+                var startLine = resolved.StartLine;
+                var filePath = resolved.FilePath;
                 var kind = sym.GetDisplayKind();
                 var containingType = sym.GetContainingTypeName();
 
@@ -182,6 +184,7 @@ public class GetSymbolInfoTool
 
     private static async Task<string> BuildCompleteMarkdownAsync(
         ISymbol symbol,
+        ResolvedSymbol resolved,
         int maxBodyLines,
         int maxReferences,
         int maxCallGraph,
@@ -193,8 +196,9 @@ public class GetSymbolInfoTool
     {
         var sb = new StringBuilder();
         var displayName = symbol.GetDisplayName();
-        var (startLine, endLine) = symbol.GetLineRange();
-        var filePath = symbol.GetFilePath();
+        var startLine = resolved.StartLine;
+        var endLine = resolved.EndLine;
+        var filePath = resolved.FilePath;
         var kind = symbol.GetDisplayKind();
 
         // Header with concise location
@@ -405,6 +409,9 @@ public class GetSymbolInfoTool
             sb.AppendLine("```");
             sb.AppendLine();
         }
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         // References using existing helper
         try

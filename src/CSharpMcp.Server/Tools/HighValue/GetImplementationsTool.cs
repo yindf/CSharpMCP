@@ -59,13 +59,13 @@ public class GetImplementationsTool
             }
 
             // Handle disambiguation when multiple symbols found
-            ISymbol? symbol;
+            ResolvedSymbol? selectedResolved;
             if (allSymbols.Count > 1 && !parsedKind.HasValue)
             {
                 // Try to auto-select by preference: interface/abstract methods first
-                symbol = TrySelectByImplementationPriority(allSymbols);
+                selectedResolved = TrySelectResolvedByImplementationPriority(allSymbols);
 
-                if (symbol == null)
+                if (selectedResolved == null)
                 {
                     // Could not auto-select, show disambiguation list
                     logger.LogInformation("Multiple symbols found for {SymbolName}, showing disambiguation", symbolName);
@@ -73,27 +73,28 @@ public class GetImplementationsTool
                 }
 
                 logger.LogInformation("Auto-selected symbol: {SymbolName} ({Kind}) in {File}",
-                    symbol.Name, symbol.Kind, symbol.Locations.FirstOrDefault()?.SourceTree?.FilePath);
+                    selectedResolved.Symbol.Name, selectedResolved.Symbol.Kind, selectedResolved.FilePath);
             }
             else
             {
-                symbol = allSymbols.First();
+                selectedResolved = allSymbols.First();
             }
 
+            var symbol = selectedResolved.Symbol;
             var solution = workspaceManager.GetCurrentSolution();
 
             // Handle based on symbol kind
             if (symbol is INamedTypeSymbol type)
             {
-                return await HandleTypeImplementationsAsync(type, solution, maxResults, logger, cancellationToken);
+                return await HandleTypeImplementationsAsync(type, selectedResolved, solution, maxResults, logger, cancellationToken);
             }
             else if (symbol is IMethodSymbol method)
             {
-                return await HandleMethodImplementationsAsync(method, solution, maxResults, logger, cancellationToken);
+                return await HandleMethodImplementationsAsync(method, selectedResolved, solution, maxResults, logger, cancellationToken);
             }
             else if (symbol is IPropertySymbol property)
             {
-                return await HandlePropertyImplementationsAsync(property, solution, maxResults, logger, cancellationToken);
+                return await HandlePropertyImplementationsAsync(property, selectedResolved, solution, maxResults, logger, cancellationToken);
             }
             else
             {
@@ -110,6 +111,7 @@ public class GetImplementationsTool
 
     private static async Task<string> HandleTypeImplementationsAsync(
         INamedTypeSymbol type,
+        ResolvedSymbol resolved,
         Solution solution,
         int maxResults,
         ILogger logger,
@@ -132,11 +134,12 @@ public class GetImplementationsTool
 
         logger.LogInformation("Found {Count} type implementations for: {TypeName}", implementations.Count, type.Name);
 
-        return BuildTypeImplementationsMarkdown(type, implementations, maxResults);
+        return BuildTypeImplementationsMarkdown(type, resolved, implementations, maxResults);
     }
 
     private static async Task<string> HandleMethodImplementationsAsync(
         IMethodSymbol method,
+        ResolvedSymbol resolved,
         Solution solution,
         int maxResults,
         ILogger logger,
@@ -161,11 +164,12 @@ public class GetImplementationsTool
 
         logger.LogInformation("Found {Count} method implementations for: {MethodName}", implementations.Count, method.Name);
 
-        return BuildMethodImplementationsMarkdown(method, implementations, maxResults);
+        return BuildMethodImplementationsMarkdown(method, resolved, implementations, maxResults);
     }
 
     private static async Task<string> HandlePropertyImplementationsAsync(
         IPropertySymbol property,
+        ResolvedSymbol resolved,
         Solution solution,
         int maxResults,
         ILogger logger,
@@ -190,11 +194,12 @@ public class GetImplementationsTool
 
         logger.LogInformation("Found {Count} property implementations for: {PropertyName}", implementations.Count, property.Name);
 
-        return BuildPropertyImplementationsMarkdown(property, implementations, maxResults);
+        return BuildPropertyImplementationsMarkdown(property, resolved, implementations, maxResults);
     }
 
     private static string BuildTypeImplementationsMarkdown(
         INamedTypeSymbol type,
+        ResolvedSymbol resolved,
         List<INamedTypeSymbol> implementations,
         int maxResults)
     {
@@ -205,9 +210,11 @@ public class GetImplementationsTool
         sb.AppendLine($"# Implementations of `{typeName}`");
         sb.AppendLine();
         sb.AppendLine($"**Kind**: {kind} ({type.TypeKind})");
-        var (startLine, _) = type.GetLineRange();
-        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(type.GetFilePath(), startLine)}");
+        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(resolved.FilePath, resolved.StartLine)}");
         sb.AppendLine();
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         // Summary
         sb.AppendLine($"## Summary");
@@ -264,6 +271,7 @@ public class GetImplementationsTool
 
     private static string BuildMethodImplementationsMarkdown(
         IMethodSymbol method,
+        ResolvedSymbol resolved,
         List<IMethodSymbol> implementations,
         int maxResults)
     {
@@ -281,9 +289,11 @@ public class GetImplementationsTool
                          method.ContainingType.TypeKind == TypeKind.Interface ? "Interface" : "Method";
         sb.AppendLine($"**Kind**: {methodKind}");
         sb.AppendLine($"**Containing Type**: `{containingType}`");
-        var (startLine, _) = method.GetLineRange();
-        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(method.GetFilePath(), startLine)}");
+        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(resolved.FilePath, resolved.StartLine)}");
         sb.AppendLine();
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         // Summary
         sb.AppendLine($"## Summary");
@@ -331,6 +341,7 @@ public class GetImplementationsTool
 
     private static string BuildPropertyImplementationsMarkdown(
         IPropertySymbol property,
+        ResolvedSymbol resolved,
         List<IPropertySymbol> implementations,
         int maxResults)
     {
@@ -348,9 +359,11 @@ public class GetImplementationsTool
                        property.ContainingType.TypeKind == TypeKind.Interface ? "Interface" : "Property";
         sb.AppendLine($"**Kind**: {propKind}");
         sb.AppendLine($"**Containing Type**: `{containingType}`");
-        var (startLine, _) = property.GetLineRange();
-        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(property.GetFilePath(), startLine)}");
+        sb.AppendLine($"**Location**: {MarkdownHelper.FormatFileLocation(resolved.FilePath, resolved.StartLine)}");
         sb.AppendLine();
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         // Summary
         sb.AppendLine($"## Summary");
@@ -432,59 +445,60 @@ public class GetImplementationsTool
     }
 
     /// <summary>
-    /// Try to auto-select a symbol by implementation priority.
+    /// Try to auto-select a resolved symbol by implementation priority.
     /// Priority: Interface > Abstract class > Abstract method > Virtual method > Regular method
     /// </summary>
-    private static ISymbol? TrySelectByImplementationPriority(IReadOnlyList<ISymbol> symbols)
+    private static ResolvedSymbol? TrySelectResolvedByImplementationPriority(IReadOnlyList<ResolvedSymbol> resolvedSymbols)
     {
         // First priority: Interfaces (for finding implementations)
-        var iface = symbols.FirstOrDefault(s => s is INamedTypeSymbol { TypeKind: TypeKind.Interface });
+        var iface = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface });
         if (iface != null) return iface;
 
         // Second priority: Abstract classes
-        var abstractClass = symbols.FirstOrDefault(s => s is INamedTypeSymbol { IsAbstract: true, TypeKind: TypeKind.Class });
+        var abstractClass = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol { IsAbstract: true, TypeKind: TypeKind.Class });
         if (abstractClass != null) return abstractClass;
 
         // Third priority: Abstract methods
-        var abstractMethod = symbols.FirstOrDefault(s => s is IMethodSymbol { IsAbstract: true });
+        var abstractMethod = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol { IsAbstract: true });
         if (abstractMethod != null) return abstractMethod;
 
         // Fourth priority: Virtual methods
-        var virtualMethod = symbols.FirstOrDefault(s => s is IMethodSymbol { IsVirtual: true });
+        var virtualMethod = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol { IsVirtual: true });
         if (virtualMethod != null) return virtualMethod;
 
         // Fifth priority: Interface methods
-        var interfaceMethod = symbols.FirstOrDefault(s => s is IMethodSymbol method && method.ContainingType?.TypeKind == TypeKind.Interface);
+        var interfaceMethod = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is IMethodSymbol method && method.ContainingType?.TypeKind == TypeKind.Interface);
         if (interfaceMethod != null) return interfaceMethod;
 
         // Sixth priority: Regular types (classes)
-        var regularType = symbols.FirstOrDefault(s => s is INamedTypeSymbol { TypeKind: TypeKind.Class });
+        var regularType = resolvedSymbols.FirstOrDefault(rs => rs.Symbol is INamedTypeSymbol { TypeKind: TypeKind.Class });
         if (regularType != null) return regularType;
 
-        // Fallback: Return first symbol
-        return symbols.FirstOrDefault();
+        // Fallback: Return first resolved symbol
+        return resolvedSymbols.FirstOrDefault();
     }
 
-    private static string BuildDisambiguationResponse(string symbolName, IReadOnlyList<ISymbol> symbols)
+    private static string BuildDisambiguationResponse(string symbolName, IReadOnlyList<ResolvedSymbol> resolvedSymbols)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Multiple Symbols Found for `{symbolName}`");
         sb.AppendLine();
-        sb.AppendLine($"Found {symbols.Count} symbols matching this name. Please specify which one:");
+        sb.AppendLine($"Found {resolvedSymbols.Count} symbols matching this name. Please specify which one:");
         sb.AppendLine();
 
         // Group by kind
-        var byKind = symbols.GroupBy(s => s.Kind).OrderByDescending(g => g.Count());
+        var byKind = resolvedSymbols.GroupBy(rs => rs.Symbol.Kind).OrderByDescending(g => g.Count());
 
         foreach (var group in byKind)
         {
             sb.AppendLine($"## {group.Key}s ({group.Count()})");
             sb.AppendLine();
 
-            foreach (var sym in group.Take(10))
+            foreach (var resolved in group.Take(10))
             {
-                var (startLine, _) = sym.GetLineRange();
-                var filePath = sym.GetFilePath();
+                var sym = resolved.Symbol;
+                var startLine = resolved.StartLine;
+                var filePath = resolved.FilePath;
                 var kind = sym.GetDisplayKind();
                 var containingType = sym.GetContainingTypeName();
 

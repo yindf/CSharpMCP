@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 
 namespace CSharpMcp.Server.Roslyn;
 
@@ -14,9 +15,10 @@ namespace CSharpMcp.Server.Roslyn;
 public static class SymbolResolver
 {
     /// <summary>
-    /// Resolve a single symbol from file location info with fuzzy matching
+    /// Resolve a single symbol from file location info with fuzzy matching.
+    /// Returns the ResolvedSymbol with the best matching location.
     /// </summary>
-    public static async Task<ISymbol?> ResolveSymbolAsync(
+    public static async Task<ResolvedSymbol?> ResolveSymbolAsync(
         string filePath,
         int lineNumber,
         string symbolName,
@@ -24,25 +26,15 @@ public static class SymbolResolver
         SymbolFilter filter,
         CancellationToken cancellationToken)
     {
-        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
-
-        if (!symbols.Any())
-        {
-            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
-        }
-
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return symbols.FirstOrDefault();
-        }
-
-        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+        var resolved = await ResolveAllSymbolsAsync(filePath, lineNumber, symbolName, workspaceManager, filter, null, cancellationToken);
+        return resolved.FirstOrDefault();
     }
 
     /// <summary>
-    /// Resolve a single symbol from file location info with fuzzy matching and SymbolKind filtering
+    /// Resolve a single symbol from file location info with fuzzy matching and SymbolKind filtering.
+    /// Returns a ResolvedSymbol with the best matching location.
     /// </summary>
-    public static async Task<ISymbol?> ResolveSymbolAsync(
+    public static async Task<ResolvedSymbol?> ResolveSymbolAsync(
         string filePath,
         int lineNumber,
         string symbolName,
@@ -51,32 +43,15 @@ public static class SymbolResolver
         SymbolKind? symbolKind,
         CancellationToken cancellationToken)
     {
-        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, filter, cancellationToken);
-
-        if (!symbols.Any())
-        {
-            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, filter, cancellationToken);
-        }
-
-        // Filter by SymbolKind if specified
-        if (symbolKind.HasValue)
-        {
-            symbols = FilterBySymbolKind(symbols, symbolKind.Value);
-        }
-
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return symbols.FirstOrDefault();
-        }
-
-        return OrderSymbolsByProximity(symbols, filePath, lineNumber).FirstOrDefault();
+        var resolved = await ResolveAllSymbolsAsync(filePath, lineNumber, symbolName, workspaceManager, filter, symbolKind, cancellationToken);
+        return resolved.FirstOrDefault();
     }
 
     /// <summary>
     /// Resolve all matching symbols and return them ordered by proximity.
-    /// Used for disambiguation when multiple symbols match the same name.
+    /// Returns ResolvedSymbols with their best matching locations.
     /// </summary>
-    public static async Task<IReadOnlyList<ISymbol>> ResolveAllSymbolsAsync(
+    public static async Task<IReadOnlyList<ResolvedSymbol>> ResolveAllSymbolsAsync(
         string filePath,
         int lineNumber,
         string symbolName,
@@ -100,10 +75,40 @@ public static class SymbolResolver
 
         if (string.IsNullOrEmpty(filePath))
         {
-            return symbols.ToList();
+            // No file path - return with first location
+            return symbols.Select(s => ResolvedSymbol.Create(s, null, 0)).ToList();
         }
 
-        return OrderSymbolsByProximity(symbols, filePath, lineNumber).ToList();
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber);
+    }
+
+    /// <summary>
+    /// Resolve multiple symbols from file location info with fuzzy matching.
+    /// Returns ResolvedSymbols with their best matching locations.
+    /// </summary>
+    public static async Task<IReadOnlyList<ResolvedSymbol>> ResolveSymbolsAsync(
+        string filePath,
+        int lineNumber,
+        string symbolName,
+        IWorkspaceManager workspaceManager,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("ResolveSymbolsAsync: symbols for '{SymbolName}' at {FilePath}:{Line}", symbolName, filePath, lineNumber);
+
+        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
+
+        if (!symbols.Any())
+        {
+            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return symbols.Select(s => ResolvedSymbol.Create(s, null, 0)).ToList();
+        }
+
+        return OrderSymbolsByProximity(symbols, filePath, lineNumber, logger);
     }
 
     /// <summary>
@@ -115,61 +120,43 @@ public static class SymbolResolver
     }
 
     /// <summary>
-    /// Resolve multiple symbols from file location info with fuzzy matching
-    /// </summary>
-    public static async Task<IEnumerable<ISymbol>> ResolveSymbolsAsync(
-        string filePath,
-        int lineNumber,
-        string symbolName,
-        IWorkspaceManager workspaceManager,
-        CancellationToken cancellationToken)
-    {
-        var symbols = await workspaceManager.SearchSymbolsAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
-
-        if (!symbols.Any())
-        {
-            symbols = await workspaceManager.SearchSymbolsWithPatternAsync(symbolName, SymbolFilter.TypeAndMember, cancellationToken);
-        }
-
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return symbols;
-        }
-
-        return OrderSymbolsByProximity(symbols, filePath, lineNumber);
-    }
-
-    /// <summary>
     /// Order symbols by proximity to a given file and line number.
     /// Symbols in the matching file and closest to the line number are ranked highest.
+    /// Returns ResolvedSymbols with their best matching locations.
     /// </summary>
-    private static IEnumerable<ISymbol> OrderSymbolsByProximity(
+    private static IReadOnlyList<ResolvedSymbol> OrderSymbolsByProximity(
         IEnumerable<ISymbol> symbols,
         string filePath,
-        int lineNumber)
+        int lineNumber,
+        ILogger logger = null)
     {
         var filename = Path.GetFileName(filePath)?.ToLowerInvariant();
+        var symbolList = symbols.ToList();
 
-        return symbols.OrderBy(s =>
+        // Calculate scores and create ResolvedSymbols
+        var resolvedSymbols = new List<ResolvedSymbol>();
+
+        foreach (var s in symbolList)
         {
-            var totalScore = 0;
+            var resolved = ResolvedSymbol.Create(s, filename, lineNumber);
+            resolvedSymbols.Add(resolved);
+        }
 
-            foreach (var location in s.Locations)
+        // Sort by score (ascending - lower is better)
+        resolvedSymbols.Sort((a, b) => a.Score.CompareTo(b.Score));
+
+        // Log for debugging
+        if (logger != null)
+        {
+            logger.LogInformation("OrderSymbolsByProximity: target={Filename}, line={LineNumber}, total={Count}",
+                filename, lineNumber, resolvedSymbols.Count);
+            foreach (var x in resolvedSymbols.Take(10))
             {
-                var lineSpan = location.GetLineSpan();
-                var path = lineSpan.Path.ToLowerInvariant();
-
-                // Large penalty if not in matching file
-                var fileMatch = path.Contains(filename, StringComparison.InvariantCultureIgnoreCase);
-                var fileScore = fileMatch ? 0 : 10000;
-
-                // Distance from target line number
-                var lineScore = Math.Abs(lineSpan.StartLinePosition.Line - lineNumber);
-
-                totalScore += fileScore + lineScore;
+                logger.LogInformation("  {SymbolName} score={Score} path={Path}",
+                    x.Symbol.Name, x.Score, x.FilePath);
             }
+        }
 
-            return totalScore;
-        });
+        return resolvedSymbols;
     }
 }

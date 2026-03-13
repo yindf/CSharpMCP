@@ -38,17 +38,16 @@ public class GetCallGraphTool
             logger.LogInformation("Getting call graph: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbol = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Member, cancellationToken);
-            if (symbol == null)
+            var resolved = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Member, cancellationToken);
+            if (resolved == null)
             {
-                logger.LogWarning("Method not found: {SymbolName}", symbolName ?? "at specified location");
-                return MarkdownHelper.BuildSymbolNotFoundResponse(
-                    filePath,
-                    lineNumber,
-                    symbolName,
-                    "- Line numbers should point to a method declaration\n- Use `GetSymbols` first to find valid line numbers for methods\n- Or provide a valid `symbolName` parameter");
+                var errorDetails = await MarkdownHelper.BuildSymbolNotFoundErrorDetailsAsync(
+                    filePath, lineNumber, symbolName ?? "Not specified", workspaceManager.GetCurrentSolution(), cancellationToken);
+                logger.LogWarning("Symbol not found: {Details}", errorDetails);
+                return GetErrorHelpResponse(errorDetails.ToString());
             }
 
+            var symbol = resolved.Symbol;
             if (symbol is not IMethodSymbol method)
             {
                 logger.LogWarning("Symbol is not a method: {SymbolName}", symbol.Name);

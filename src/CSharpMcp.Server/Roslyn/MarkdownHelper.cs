@@ -452,4 +452,52 @@ public static class MarkdownHelper
 
         sb.AppendLine();
     }
+
+    /// <summary>
+    /// Append other partial definitions section if the symbol has multiple locations
+    /// </summary>
+    public static void AppendOtherPartialDefinitions(StringBuilder sb, ResolvedSymbol resolved)
+    {
+        var symbol = resolved.Symbol;
+        var bestLocation = resolved.BestLocation;
+
+        // Count other locations first without allocating a list
+        int count = 0;
+        foreach (var loc in symbol.Locations)
+        {
+            if (loc.IsInSource && loc.SourceTree != null && !loc.Equals(bestLocation))
+                count++;
+        }
+
+        if (count == 0)
+            return;
+
+        // Determine symbol kind text (partial class, partial struct, etc.)
+        var kindText = symbol switch
+        {
+            INamedTypeSymbol { TypeKind: TypeKind.Class } => "partial class",
+            INamedTypeSymbol { TypeKind: TypeKind.Struct } => "partial struct",
+            INamedTypeSymbol { TypeKind: TypeKind.Interface } => "partial interface",
+            IMethodSymbol => "partial method",
+            _ => "partial definition"
+        };
+
+        sb.AppendLine($"## Other Partial Definitions '{kindText}' ({count})");
+        sb.AppendLine();
+
+        foreach (var location in symbol.Locations)
+        {
+            if (!location.IsInSource || location.SourceTree == null || location.Equals(bestLocation))
+                continue;
+
+            var lineSpan = location.GetLineSpan();
+            var filePath = lineSpan.Path;
+            var fileName = Path.GetFileName(filePath);
+            var startLine = lineSpan.StartLinePosition.Line + 1;
+
+            sb.AppendLine($"- `{fileName}:{startLine}`");
+        }
+
+        sb.AppendLine();
+    }
 }

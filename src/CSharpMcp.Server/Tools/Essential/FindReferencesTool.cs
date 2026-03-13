@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -41,8 +42,8 @@ public class FindReferencesTool
             logger.LogInformation("Finding references: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbol = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.TypeAndMember, cancellationToken);
-            if (symbol == null)
+            var resolved = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.TypeAndMember, cancellationToken);
+            if (resolved == null)
             {
                 var errorDetails = await MarkdownHelper.BuildSymbolNotFoundErrorDetailsAsync(
                     filePath, lineNumber, symbolName ?? "Not specified", workspaceManager.GetCurrentSolution(), cancellationToken);
@@ -50,6 +51,7 @@ public class FindReferencesTool
                 return GetErrorHelpResponse(errorDetails.ToString());
             }
 
+            var symbol = resolved.Symbol;
             var solution = workspaceManager.GetCurrentSolution();
             var referencedSymbols = (await SymbolFinder.FindReferencesAsync(
                 symbol,
@@ -144,7 +146,7 @@ public class FindReferencesTool
             foreach (var fileGroup in byFile)
             {
                 var relativePath = GetRelativePath(fileGroup.Key);
-                var fileName = System.IO.Path.GetFileName(relativePath);
+                var fileName = Path.GetFileName(relativePath);
                 var fileRefs = fileGroup.Count();
 
                 sb.AppendLine($"### {fileName}");
@@ -191,8 +193,8 @@ public class FindReferencesTool
     {
         try
         {
-            var currentDir = System.IO.Directory.GetCurrentDirectory();
-            var relativePath = System.IO.Path.GetRelativePath(currentDir, absolutePath);
+            var currentDir = Directory.GetCurrentDirectory();
+            var relativePath = Path.GetRelativePath(currentDir, absolutePath);
             return string.IsNullOrEmpty(relativePath) ? absolutePath.Replace('\\', '/') : relativePath.Replace('\\', '/');
         }
         catch

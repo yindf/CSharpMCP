@@ -49,19 +49,21 @@ public class RenameSymbolTool
                 filePath, lineNumber, symbolName, newName);
 
             // Resolve the symbol
-            var symbol = await SymbolResolver.ResolveSymbolAsync(
+            var resolved = await SymbolResolver.ResolveSymbolAsync(
                 filePath, lineNumber, symbolName ?? "",
                 workspaceManager,
                 SymbolFilter.TypeAndMember | SymbolFilter.Namespace,
                 cancellationToken);
 
-            if (symbol == null)
+            if (resolved == null)
             {
                 var errorDetails = await MarkdownHelper.BuildSymbolNotFoundErrorDetailsAsync(
                     filePath, lineNumber, symbolName ?? "Not specified",
                     workspaceManager.GetCurrentSolution(), cancellationToken);
                 return GetErrorHelpResponse($"Symbol not found.\n\n{errorDetails}");
             }
+
+            var symbol = resolved.Symbol;
 
             // Check if the symbol can be renamed
             if (symbol.Locations.Length > 0 && symbol.Locations[0].IsInMetadata)

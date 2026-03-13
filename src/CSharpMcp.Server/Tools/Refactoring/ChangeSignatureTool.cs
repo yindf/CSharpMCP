@@ -50,17 +50,18 @@ public class ChangeSignatureTool
             logger.LogInformation("Changing signature for method: {MethodName}", methodName);
 
             // Find the method symbol
-            var symbol = await SymbolResolver.ResolveSymbolAsync(
+            var resolved = await SymbolResolver.ResolveSymbolAsync(
                 filePath, lineNumber, methodName,
                 workspaceManager,
                 SymbolFilter.Member,
                 cancellationToken);
 
-            if (symbol == null)
+            if (resolved == null)
             {
                 return GetErrorHelpResponse($"Method not found: `{methodName}`");
             }
 
+            var symbol = resolved.Symbol;
             if (symbol is not IMethodSymbol methodSymbol)
             {
                 return GetErrorHelpResponse($"Symbol `{methodName}` is not a method (found: {symbol.Kind})");

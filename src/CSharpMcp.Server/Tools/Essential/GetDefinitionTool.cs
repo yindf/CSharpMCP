@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -43,14 +44,16 @@ public class GetDefinitionTool
             logger.LogInformation("Resolving symbol: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbols = await SymbolResolver.ResolveSymbolsAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, cancellationToken);
+            // Use the new ResolveSymbolsAsync that returns ResolvedSymbols with best locations
+            var resolvedSymbols = await SymbolResolver.ResolveSymbolsAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, logger, cancellationToken);
 
+            // Filter to types and methods if requested
             if (definitionsOnly)
             {
-                symbols = symbols.Where(s => s is INamedTypeSymbol or IMethodSymbol).ToImmutableList();
+                resolvedSymbols = resolvedSymbols.Where(rs => rs.Symbol is INamedTypeSymbol or IMethodSymbol).ToList();
             }
 
-            if (!symbols.Any())
+            if (resolvedSymbols.Count == 0)
             {
                 var errorDetails = await MarkdownHelper.BuildSymbolNotFoundErrorDetailsAsync(
                     filePath, lineNumber, symbolName ?? "Not specified", workspaceManager.GetCurrentSolution(), cancellationToken);
@@ -58,39 +61,61 @@ public class GetDefinitionTool
                 return GetErrorHelpResponse(errorDetails.ToString());
             }
 
-            var symbolsList = symbols.ToList();
-
-            // If filePath is provided, check if top match is from that file
-            if (!string.IsNullOrEmpty(filePath))
+            // Debug: Log the order of symbols received
+            logger.LogInformation("GetDefinition: Received {Count} resolved symbols for '{SymbolName}'",
+                resolvedSymbols.Count, symbolName);
+            foreach (var rs in resolvedSymbols.Take(5))
             {
-                var topSymbol = symbolsList.First();
-                var topSymbolPath = topSymbol.GetFilePath();
-                var targetFileName = System.IO.Path.GetFileName(filePath);
+                logger.LogInformation("  - {SymbolName} at {Path}:{Line} (score={Score})",
+                    rs.Symbol.Name, rs.FilePath, rs.StartLine, rs.Score);
+            }
 
-                // Check if top symbol is in the target file (or a file with the same name)
-                if (!string.IsNullOrEmpty(topSymbolPath) &&
-                    topSymbolPath.Contains(targetFileName, StringComparison.OrdinalIgnoreCase))
+            // If filePath AND lineNumber are provided, check if first symbol is from target file
+            // The symbols are already ordered by proximity by SymbolResolver
+            if (!string.IsNullOrEmpty(filePath) && lineNumber > 0)
+            {
+                var targetFileName = Path.GetFileName(filePath).ToLowerInvariant();
+                var firstResolved = resolvedSymbols.FirstOrDefault();
+
+                // Check if the first symbol's best location is in the target file
+                if (firstResolved != null && firstResolved.FilePath.Contains(targetFileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Single best match found - return only this symbol
-                    logger.LogInformation("Resolved symbol from target file: {SymbolName}", topSymbol.Name);
-                    return await BuildSymbolMarkdownAsync(topSymbol, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
+                    // First symbol is from target file - return it (it's the closest match)
+                    logger.LogInformation("Resolved symbol from target file: {SymbolName} in {FilePath}",
+                        firstResolved.Symbol.Name, firstResolved.FilePath);
+                    return await BuildSymbolMarkdownAsync(firstResolved, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
+                }
+            }
+            // If only filePath is provided (no lineNumber), find symbol from that file
+            else if (!string.IsNullOrEmpty(filePath))
+            {
+                var targetFileName = Path.GetFileName(filePath).ToLowerInvariant();
+
+                var fileMatch = resolvedSymbols.FirstOrDefault(rs =>
+                    rs.FilePath.Contains(targetFileName, StringComparison.OrdinalIgnoreCase));
+
+                if (fileMatch != null)
+                {
+                    logger.LogInformation("Resolved symbol from target file: {SymbolName} in {FilePath}",
+                        fileMatch.Symbol.Name, filePath);
+                    return await BuildSymbolMarkdownAsync(fileMatch, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
                 }
             }
 
             // Multiple ambiguous matches - show disambiguation list
-            if (symbolsList.Count > 1)
+            if (resolvedSymbols.Count > 1)
             {
                 logger.LogInformation("Multiple symbols found for '{SymbolName}', showing disambiguation list", symbolName);
-                return BuildDisambiguationResponse(symbolsList, symbolName ?? "symbol");
+                return BuildDisambiguationResponse(resolvedSymbols, symbolName ?? "symbol");
             }
 
             // Single match - return it
             var sb = new StringBuilder();
-            foreach (var symbol in symbolsList)
+            foreach (var resolved in resolvedSymbols)
             {
-                var result = await BuildSymbolMarkdownAsync(symbol, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
+                var result = await BuildSymbolMarkdownAsync(resolved, includeBody, maxBodyLines, workspaceManager.GetCurrentSolution(), cancellationToken);
                 sb.AppendLine(result);
-                logger.LogInformation("Resolved symbol: {SymbolName}", symbol.Name);
+                logger.LogInformation("Resolved symbol: {SymbolName}", resolved.Symbol.Name);
             }
 
             return sb.ToString();
@@ -113,16 +138,15 @@ public class GetDefinitionTool
     }
 
     private static async Task<string> BuildSymbolMarkdownAsync(
-        ISymbol symbol,
+        ResolvedSymbol resolved,
         bool includeBody,
         int maxBodyLines,
         Solution solution,
         CancellationToken cancellationToken)
     {
+        var symbol = resolved.Symbol;
         var sb = new StringBuilder();
         var displayName = symbol.GetDisplayName();
-        var (startLine, endLine) = symbol.GetLineRange();
-        var filePath = symbol.GetFilePath();
         var kind = symbol.GetDisplayKind();
 
         sb.AppendLine($"## Symbol: `{displayName}`");
@@ -140,10 +164,10 @@ public class GetDefinitionTool
         if (!string.IsNullOrEmpty(ns))
             sb.AppendLine($"- **Namespace**: {ns}");
 
-        if (startLine > 0)
+        if (resolved.StartLine > 0)
         {
-            var fileName = System.IO.Path.GetFileName(filePath);
-            sb.AppendLine($"- **Location**: `{fileName}:{startLine}-{endLine}`");
+            var fileName = Path.GetFileName(resolved.FilePath);
+            sb.AppendLine($"- **Location**: `{fileName}:{resolved.StartLine}-{resolved.EndLine}`");
         }
         sb.AppendLine();
 
@@ -175,7 +199,7 @@ public class GetDefinitionTool
                 sb.AppendLine(implementation);
                 sb.AppendLine("```");
 
-                var totalLines = endLine - startLine + 1;
+                var totalLines = resolved.EndLine - resolved.StartLine + 1;
                 if (maxBodyLines < totalLines)
                 {
                     sb.AppendLine($"*... {totalLines - maxBodyLines} more lines hidden*");
@@ -183,6 +207,9 @@ public class GetDefinitionTool
                 sb.AppendLine();
             }
         }
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         try
         {
@@ -202,7 +229,7 @@ public class GetDefinitionTool
                     foreach (var loc in refSym.Locations.Take(2))
                     {
                         var refFilePath = loc.Document.FilePath;
-                        var refFileName = System.IO.Path.GetFileName(refFilePath);
+                        var refFileName = Path.GetFileName(refFilePath);
                         var refLineSpan = loc.Location.GetLineSpan();
                         var refLine = refLineSpan.StartLinePosition.Line + 1;
 
@@ -213,6 +240,7 @@ public class GetDefinitionTool
                         {
                             sb.AppendLine($"  - {lineText.Trim()}");
                         }
+
                         shownRefs++;
                     }
                 }
@@ -226,32 +254,44 @@ public class GetDefinitionTool
         return sb.ToString();
     }
 
-    private static string BuildDisambiguationResponse(List<ISymbol> symbols, string symbolName)
+    private static string BuildDisambiguationResponse(IReadOnlyList<ResolvedSymbol> resolvedSymbols, string symbolName)
     {
         var sb = new StringBuilder();
 
         sb.AppendLine($"## Multiple Symbols Found: `{symbolName}`");
         sb.AppendLine();
-        sb.AppendLine($"Found {symbols.Count} symbols with this name. Please specify the file path and line number to disambiguate:");
+        sb.AppendLine($"Found {resolvedSymbols.Count} symbols with this name. Please specify the file path and line number to disambiguate:");
         sb.AppendLine();
 
-        var groupedByFile = symbols
-            .SelectMany(s => s.Locations.Select(loc => (Symbol: s, Location: loc)))
-            .Where(x => x.Location.IsInSource)
-            .GroupBy(x => x.Location.SourceTree?.FilePath ?? "unknown")
-            .OrderBy(g => g.Key);
+        // Group by file but maintain proximity order
+        var seenFiles = new HashSet<string>();
+        var orderedGroups = new List<(string FilePath, List<(ResolvedSymbol Resolved, int Line)> Symbols)>();
 
-        foreach (var fileGroup in groupedByFile.Take(15))
+        foreach (var resolved in resolvedSymbols)
         {
-            var filePath = fileGroup.Key;
-            var displayPath = MarkdownHelper.GetDisplayPath(filePath, null);
+            var filePath = resolved.FilePath;
+            if (string.IsNullOrEmpty(filePath)) continue;
 
+            var line = resolved.StartLine;
+
+            if (!seenFiles.Contains(filePath))
+            {
+                seenFiles.Add(filePath);
+                orderedGroups.Add((filePath, new List<(ResolvedSymbol, int)>()));
+            }
+
+            var group = orderedGroups.First(g => g.FilePath == filePath);
+            group.Symbols.Add((resolved, line));
+        }
+
+        foreach (var (filePath, fileSymbols) in orderedGroups.Take(15))
+        {
+            var displayPath = MarkdownHelper.GetDisplayPath(filePath, null);
             sb.AppendLine($"### `{displayPath}`");
 
-            foreach (var (symbol, location) in fileGroup.Take(3))
+            foreach (var (resolved, line) in fileSymbols.Take(3))
             {
-                var lineSpan = location.GetLineSpan();
-                var line = lineSpan.StartLinePosition.Line + 1;
+                var symbol = resolved.Symbol;
                 var kind = symbol.GetDisplayKind();
                 var containingType = symbol.GetContainingTypeName();
 
@@ -265,9 +305,9 @@ public class GetDefinitionTool
             sb.AppendLine();
         }
 
-        if (groupedByFile.Count() > 15)
+        if (orderedGroups.Count > 15)
         {
-            sb.AppendLine($"*... and {groupedByFile.Count() - 15} more files*");
+            sb.AppendLine($"*... and {orderedGroups.Count - 15} more files*");
             sb.AppendLine();
         }
 

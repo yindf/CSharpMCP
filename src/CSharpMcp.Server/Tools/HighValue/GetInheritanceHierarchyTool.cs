@@ -41,8 +41,8 @@ public class GetInheritanceHierarchyTool
             logger.LogInformation("Getting inheritance hierarchy: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbol = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
-            if (symbol == null)
+            var resolved = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
+            if (resolved == null)
             {
                 logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
                 return MarkdownHelper.BuildSymbolNotFoundResponse(
@@ -52,6 +52,7 @@ public class GetInheritanceHierarchyTool
                     "- Line numbers should point to a class, struct, interface, or enum declaration\n- Use `GetSymbols` first to find valid line numbers for types\n- Or provide a valid `symbolName` parameter");
             }
 
+            var symbol = resolved.Symbol;
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
@@ -70,7 +71,7 @@ public class GetInheritanceHierarchyTool
 
             logger.LogInformation("Retrieved inheritance hierarchy for: {TypeName}", type.Name);
 
-            return BuildHierarchyMarkdown(type, tree, includeDerivedTypes, showImplementationStatus);
+            return BuildHierarchyMarkdown(type, resolved, tree, includeDerivedTypes, showImplementationStatus);
         }
         catch (Exception ex)
         {
@@ -91,6 +92,7 @@ public class GetInheritanceHierarchyTool
 
     private static string BuildHierarchyMarkdown(
         INamedTypeSymbol type,
+        ResolvedSymbol resolved,
         InheritanceTree tree,
         bool includeDerivedTypes,
         bool showImplementationStatus)
@@ -102,9 +104,11 @@ public class GetInheritanceHierarchyTool
         sb.AppendLine();
 
         var kind = type.GetNamedTypeKindDisplay();
-        var (startLine, _) = type.GetLineRange();
-        sb.AppendLine($"**Kind**: {kind} | {MarkdownHelper.FormatFileLocation(type.GetFilePath(), startLine)}");
+        sb.AppendLine($"**Kind**: {kind} | {MarkdownHelper.FormatFileLocation(resolved.FilePath, resolved.StartLine)}");
         sb.AppendLine();
+
+        // Show other partial definitions if any
+        MarkdownHelper.AppendOtherPartialDefinitions(sb, resolved);
 
         if (tree.BaseTypes.Count > 0)
         {

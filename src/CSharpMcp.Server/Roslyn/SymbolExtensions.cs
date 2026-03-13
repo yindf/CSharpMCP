@@ -50,6 +50,60 @@ public static class SymbolExtensions
         return "";
     }
 
+    /// <summary>
+    /// 获取符号的最佳匹配位置（基于目标文件名）
+    /// 如果符号有多个位置，返回与目标文件名最匹配的那个
+    /// </summary>
+    public static Location? GetBestLocation(this ISymbol symbol, string? targetFilename)
+    {
+        if (symbol.Locations.Length == 0)
+            return null;
+
+        if (string.IsNullOrEmpty(targetFilename))
+            return symbol.Locations[0];
+
+        var targetLower = targetFilename.ToLowerInvariant();
+        Location? bestLocation = null;
+
+        foreach (var location in symbol.Locations)
+        {
+            if (!location.IsInSource || location.SourceTree == null)
+                continue;
+
+            var path = location.SourceTree.FilePath.ToLowerInvariant();
+            if (path.Contains(targetLower, StringComparison.InvariantCultureIgnoreCase))
+            {
+                return location; // Exact file match - return immediately
+            }
+
+            bestLocation ??= location; // Keep first valid location as fallback
+        }
+
+        return bestLocation ?? symbol.Locations[0];
+    }
+
+    /// <summary>
+    /// 获取符号的最佳匹配文件路径（基于目标文件名）
+    /// </summary>
+    public static string GetBestFilePath(this ISymbol symbol, string? targetFilename)
+    {
+        var bestLocation = symbol.GetBestLocation(targetFilename);
+        return bestLocation?.SourceTree?.FilePath ?? "";
+    }
+
+    /// <summary>
+    /// 获取符号的最佳匹配行号范围（基于目标文件名）
+    /// </summary>
+    public static (int startLine, int endLine) GetBestLineRange(this ISymbol symbol, string? targetFilename)
+    {
+        var bestLocation = symbol.GetBestLocation(targetFilename);
+        if (bestLocation == null || !bestLocation.IsInSource)
+            return (0, 0);
+
+        var lineSpan = bestLocation.GetLineSpan();
+        return (lineSpan.StartLinePosition.Line + 1, lineSpan.EndLinePosition.Line + 1);
+    }
+
 
     /// <summary>
     /// 获取符号的完整行号范围（包含文档注释和属性）

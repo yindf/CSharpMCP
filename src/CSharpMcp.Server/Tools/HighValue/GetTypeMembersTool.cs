@@ -39,8 +39,8 @@ public class GetTypeMembersTool
             logger.LogInformation("Getting type members: {FilePath}:{LineNumber} - {SymbolName}",
                 filePath, lineNumber, symbolName);
 
-            var symbol = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
-            if (symbol == null)
+            var resolved = await SymbolResolver.ResolveSymbolAsync(filePath, lineNumber, symbolName ?? "", workspaceManager, SymbolFilter.Type, cancellationToken);
+            if (resolved == null)
             {
                 logger.LogWarning("Type not found: {SymbolName}", symbolName ?? "at specified location");
                 return MarkdownHelper.BuildSymbolNotFoundResponse(
@@ -50,6 +50,7 @@ public class GetTypeMembersTool
                     "- Line numbers should point to a class, struct, interface, or enum declaration\n- Use `GetSymbols` first to find valid line numbers for types\n- Or provide a valid `symbolName` parameter");
             }
 
+            var symbol = resolved.Symbol;
             if (symbol is not INamedTypeSymbol type)
             {
                 logger.LogWarning("Symbol is not a type: {SymbolName}", symbol.Name);
