@@ -115,29 +115,67 @@ public record GetDiagnosticsResponse(
             sb.AppendLine();
         }
 
-        // Group by file
-        var grouped = Diagnostics.GroupBy(d => d.FilePath);
+        // Group by error code for summary
+        var groupedByCode = Diagnostics
+            .GroupBy(d => d.Id)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key);
 
-        foreach (var group in grouped)
+        if (groupedByCode.Any())
         {
-            var fileName = System.IO.Path.GetFileName(group.Key);
-            sb.AppendLine($"### {fileName}");
+            sb.AppendLine("### By Error Code");
             sb.AppendLine();
+            sb.AppendLine("| Code | Count | Severity | Sample Message |");
+            sb.AppendLine("|------|-------|----------|----------------|");
 
-            foreach (var diag in group)
+            foreach (var codeGroup in groupedByCode.Take(20))
             {
-                var severityLabel = diag.Severity switch
+                var count = codeGroup.Count();
+                var severity = codeGroup.First().Severity;
+                var severityLabel = severity switch
                 {
-                    DiagnosticSeverity.Error => "[ERROR]",
-                    DiagnosticSeverity.Warning => "[WARNING]",
-                    DiagnosticSeverity.Info => "[INFO]",
-                    DiagnosticSeverity.Hidden => "[HIDDEN]",
-                    _ => "[?]"
+                    DiagnosticSeverity.Error => "🔴 Error",
+                    DiagnosticSeverity.Warning => "🟡 Warning",
+                    DiagnosticSeverity.Info => "🔵 Info",
+                    _ => "⚪ Other"
                 };
+                var sampleMessage = codeGroup.First().Message;
+                if (sampleMessage.Length > 50)
+                    sampleMessage = sampleMessage.Substring(0, 47) + "...";
 
-                sb.AppendLine($"- {severityLabel} **{diag.Id}** (Line {diag.StartLine}): {diag.Message}");
+                sb.AppendLine($"| `{codeGroup.Key}` | {count} | {severityLabel} | {sampleMessage} |");
+            }
+
+            if (groupedByCode.Count() > 20)
+            {
+                sb.AppendLine($"| ... | ({groupedByCode.Count() - 20} more codes) | | |");
             }
             sb.AppendLine();
+        }
+
+        // Sample locations by error code
+        if (Diagnostics.Count > 0)
+        {
+            sb.AppendLine("### Sample Locations");
+            sb.AppendLine();
+
+            foreach (var codeGroup in groupedByCode.Take(10))
+            {
+                sb.AppendLine($"#### `{codeGroup.Key}` ({codeGroup.Count()} occurrence{(codeGroup.Count() != 1 ? "s" : "")})");
+                sb.AppendLine();
+
+                foreach (var diag in codeGroup.Take(3))
+                {
+                    var fileName = System.IO.Path.GetFileName(diag.FilePath);
+                    sb.AppendLine($"- `{fileName}:{diag.StartLine}` - {diag.Message}");
+                }
+
+                if (codeGroup.Count() > 3)
+                {
+                    sb.AppendLine($"- ... ({codeGroup.Count() - 3} more locations)");
+                }
+                sb.AppendLine();
+            }
         }
 
         return sb.ToString();

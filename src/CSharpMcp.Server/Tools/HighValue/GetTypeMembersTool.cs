@@ -15,7 +15,7 @@ namespace CSharpMcp.Server.Tools.HighValue;
 [McpServerToolType]
 public class GetTypeMembersTool
 {
-    [McpServerTool, Description("Get all members (methods, properties, fields, events) of a type")]
+    [McpServerTool, Description("Get all members (methods, properties, fields, events) of a type with optional filtering")]
     public static async Task<string> GetTypeMembers(
         [Description("The name of the type to get members for")] string symbolName,
         IWorkspaceManager workspaceManager,
@@ -23,7 +23,10 @@ public class GetTypeMembersTool
         CancellationToken cancellationToken,
         [Description("Path to the file containing the type")] string filePath = "",
         [Description("1-based line number near the type declaration")] int lineNumber = 0,
-        [Description("Whether to include inherited members")] bool includeInherited = false)
+        [Description("Whether to include inherited members")] bool includeInherited = false,
+        [Description("Filter by access modifier: public, private, protected, internal, or empty for all")] string accessModifier = "",
+        [Description("Filter by member name pattern (supports * wildcard, e.g. 'Get*' or '*Async')")] string pattern = "",
+        [Description("Filter by member kind: Method, Property, Field, Event, or empty for all")] string memberKind = "")
     {
         try
         {
@@ -57,11 +60,11 @@ public class GetTypeMembersTool
                 return MarkdownHelper.BuildNotATypeResponse(symbol.Name, symbol.Kind.ToString());
             }
 
-            var members = GetMembers(type, includeInherited);
+            var (members, totalBeforeFilter) = GetMembers(type, includeInherited, accessModifier, pattern, memberKind);
 
-            logger.LogInformation("Retrieved {Count} members for: {TypeName}", members.Count, type.Name);
+            logger.LogInformation("Retrieved {Count} members for: {TypeName} (filtered from {Total})", members.Count, type.Name, totalBeforeFilter);
 
-            return BuildMembersMarkdown(type, members);
+            return BuildMembersMarkdown(type, members, totalBeforeFilter, accessModifier, pattern, memberKind);
         }
         catch (Exception ex)
         {
@@ -80,9 +83,12 @@ public class GetTypeMembersTool
         );
     }
 
-    private static List<ISymbol> GetMembers(
+    private static (List<ISymbol> Members, int TotalBeforeFilter) GetMembers(
         INamedTypeSymbol type,
-        bool includeInherited)
+        bool includeInherited,
+        string accessModifier,
+        string pattern,
+        string memberKind)
     {
         var allMembers = includeInherited
             ? type.AllInterfaces
@@ -91,23 +97,118 @@ public class GetTypeMembersTool
                 .Distinct(SymbolEqualityComparer.Default)
             : type.GetMembers();
 
-        return allMembers
+        var filtered = allMembers
             .Where(m => m.ShouldDisplay())  // Filter property accessors, event accessors, backing fields
-            .Where(m => m.Locations.FirstOrDefault()?.IsInMetadata != true)
-            .ToList();
+            .Where(m => m.Locations.FirstOrDefault()?.IsInMetadata != true);
+
+        // Count total before filtering
+        var totalBeforeFilter = filtered.Count();
+
+        // Apply access modifier filter
+        if (!string.IsNullOrEmpty(accessModifier))
+        {
+            var targetAccessibility = ParseAccessibility(accessModifier);
+            if (targetAccessibility.HasValue)
+            {
+                filtered = filtered.Where(m => m.DeclaredAccessibility == targetAccessibility.Value);
+            }
+        }
+
+        // Apply pattern filter (supports * wildcard)
+        if (!string.IsNullOrEmpty(pattern))
+        {
+            var regexPattern = "^" + System.Text.RegularExpressions.Regex.Escape(pattern)
+                .Replace("\\*", ".*") + "$";
+            var regex = new System.Text.RegularExpressions.Regex(regexPattern,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            filtered = filtered.Where(m => regex.IsMatch(m.Name));
+        }
+
+        // Apply member kind filter
+        if (!string.IsNullOrEmpty(memberKind))
+        {
+            var targetKind = ParseMemberKind(memberKind);
+            if (targetKind.HasValue)
+            {
+                filtered = filtered.Where(m => m.Kind == targetKind.Value);
+            }
+        }
+
+        return (filtered.ToList(), totalBeforeFilter);
+    }
+
+    private static Accessibility? ParseAccessibility(string accessModifier)
+    {
+        return accessModifier.ToLowerInvariant() switch
+        {
+            "public" => Accessibility.Public,
+            "private" => Accessibility.Private,
+            "protected" => Accessibility.Protected,
+            "internal" => Accessibility.Internal,
+            "protected internal" => Accessibility.ProtectedOrInternal,
+            "private protected" => Accessibility.ProtectedAndInternal,
+            _ => null
+        };
+    }
+
+    private static SymbolKind? ParseMemberKind(string memberKind)
+    {
+        return memberKind.ToLowerInvariant() switch
+        {
+            "method" => SymbolKind.Method,
+            "property" => SymbolKind.Property,
+            "field" => SymbolKind.Field,
+            "event" => SymbolKind.Event,
+            _ => null
+        };
     }
 
     private static string BuildMembersMarkdown(
         INamedTypeSymbol type,
-        List<ISymbol> members)
+        List<ISymbol> members,
+        int totalBeforeFilter,
+        string accessModifier,
+        string pattern,
+        string memberKind)
     {
         var sb = new StringBuilder();
         var typeName = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
 
         sb.AppendLine($"## Type Members: `{typeName}`");
         sb.AppendLine();
-        sb.AppendLine($"**Total: {members.Count} member{(members.Count != 1 ? "s" : "")}**");
+
+        // Show filter info if filters were applied
+        var hasFilters = !string.IsNullOrEmpty(accessModifier) || !string.IsNullOrEmpty(pattern) || !string.IsNullOrEmpty(memberKind);
+        if (hasFilters)
+        {
+            var filterParts = new List<string>();
+            if (!string.IsNullOrEmpty(accessModifier))
+                filterParts.Add($"access: `{accessModifier}`");
+            if (!string.IsNullOrEmpty(pattern))
+                filterParts.Add($"pattern: `{pattern}`");
+            if (!string.IsNullOrEmpty(memberKind))
+                filterParts.Add($"kind: `{memberKind}`");
+
+            sb.AppendLine($"**Filters**: {string.Join(", ", filterParts)}");
+            sb.AppendLine($"**Showing**: {members.Count} of {totalBeforeFilter} members");
+        }
+        else
+        {
+            sb.AppendLine($"**Total**: {members.Count} member{(members.Count != 1 ? "s" : "")}");
+        }
         sb.AppendLine();
+
+        // Show filter hint if no results but filters were applied
+        if (members.Count == 0 && hasFilters)
+        {
+            sb.AppendLine("_No members match the specified filters._");
+            sb.AppendLine();
+            sb.AppendLine("**Tips**:");
+            sb.AppendLine("- Try removing or adjusting filter criteria");
+            sb.AppendLine("- Use `accessModifier: \"\"` to show all access levels");
+            sb.AppendLine("- Use `pattern: \"\"` to show all members");
+            return sb.ToString();
+        }
 
         var groupedByKind = members.GroupBy(m => m.GetDisplayKind());
 

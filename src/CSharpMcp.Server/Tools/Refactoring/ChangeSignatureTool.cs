@@ -72,11 +72,21 @@ public class ChangeSignatureTool
                 return GetErrorHelpResponse($"Cannot change signature of `{methodName}`: it is defined in referenced metadata (external assembly).");
             }
 
-            // Parse the mapping if provided
+            // Parse the mapping if provided, otherwise auto-detect from parameter names
             Dictionary<int, int>? mapping = null;
             if (!string.IsNullOrEmpty(parameterMapping))
             {
                 mapping = ParseParameterMapping(parameterMapping);
+            }
+            else
+            {
+                // Auto-detect parameter reordering by matching parameter names
+                mapping = AutoDetectParameterMapping(methodSymbol.Parameters, newParameters);
+                if (mapping != null && mapping.Count > 0)
+                {
+                    logger.LogInformation("Auto-detected parameter mapping: {Mapping}",
+                        string.Join(", ", mapping.Select(kv => $"{kv.Key}->{kv.Value}")));
+                }
             }
 
             // Get all references (call sites) in ORIGINAL solution BEFORE any modifications
@@ -130,7 +140,12 @@ public class ChangeSignatureTool
             {
                 logger.LogInformation("Preview signature change for method: {MethodName}", methodName);
                 var callSiteLocations = callSiteUpdates.Select(u => (u.FilePath, u.Line)).ToList();
-                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, callSiteUpdates.Count + 1, delegateUsages, workspaceManager.WorkspacePath);
+
+                // Get sample transformations
+                var samples = await GetSampleTransformationsAsync(
+                    solution, callSiteUpdates.Take(3).ToList(), methodSymbol, mapping, cancellationToken);
+
+                return BuildPreviewResponse(methodSymbol, newParameters, callSiteLocations, callSiteUpdates.Count + 1, delegateUsages, workspaceManager.WorkspacePath, samples);
             }
 
             // Apply changes to working solution
@@ -207,6 +222,133 @@ public class ChangeSignatureTool
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Auto-detect parameter reordering by matching parameter names
+    /// </summary>
+    private static Dictionary<int, int>? AutoDetectParameterMapping(
+        IReadOnlyList<IParameterSymbol> oldParameters,
+        string newParametersString)
+    {
+        if (oldParameters.Count == 0)
+            return null;
+
+        // Parse new parameter names from the string
+        var newParamNames = ParseParameterNames(newParametersString);
+        if (newParamNames.Count == 0)
+            return null;
+
+        var mapping = new Dictionary<int, int>();
+        var oldParamNames = oldParameters.Select(p => p.Name).ToList();
+
+        // For each new position, find the old position of that parameter
+        for (int newPos = 0; newPos < newParamNames.Count && newPos < oldParameters.Count; newPos++)
+        {
+            var newName = newParamNames[newPos];
+            var oldPos = oldParamNames.IndexOf(newName);
+
+            if (oldPos >= 0 && oldPos != newPos)
+            {
+                // Parameter moved from oldPos to newPos
+                mapping[oldPos] = newPos;
+            }
+        }
+
+        // If no reordering detected, return null
+        return mapping.Count > 0 ? mapping : null;
+    }
+
+    /// <summary>
+    /// Parse parameter names from a parameter list string
+    /// </summary>
+    private static List<string> ParseParameterNames(string parametersString)
+    {
+        var names = new List<string>();
+
+        // Handle empty parameter list
+        if (string.IsNullOrWhiteSpace(parametersString.Trim().Trim('(', ')')))
+            return names;
+
+        // Split by comma, handling nested generics and default values
+        var parts = SplitParameters(parametersString);
+
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                continue;
+
+            // Extract the parameter name (last identifier before any default value)
+            var name = ExtractParameterName(trimmed);
+            if (!string.IsNullOrEmpty(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Split parameter string by commas, respecting nested brackets
+    /// </summary>
+    private static List<string> SplitParameters(string parametersString)
+    {
+        var result = new List<string>();
+        var current = new System.Text.StringBuilder();
+        int depth = 0;
+
+        foreach (char c in parametersString)
+        {
+            if (c == ',' && depth == 0)
+            {
+                result.Add(current.ToString());
+                current.Clear();
+            }
+            else
+            {
+                if (c == '<' || c == '(' || c == '[') depth++;
+                if (c == '>' || c == ')' || c == ']') depth--;
+                current.Append(c);
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            result.Add(current.ToString());
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extract parameter name from a parameter declaration
+    /// e.g., "string url" -> "url", "Action<ImageDownloadEvent> callback = null" -> "callback"
+    /// </summary>
+    private static string ExtractParameterName(string paramDecl)
+    {
+        // Remove default value part
+        var withoutDefault = paramDecl.Split('=')[0].Trim();
+
+        // Handle ref/out/in modifiers
+        var modifiers = new[] { "ref ", "out ", "in ", "params " };
+        foreach (var mod in modifiers)
+        {
+            if (withoutDefault.StartsWith(mod, StringComparison.OrdinalIgnoreCase))
+            {
+                withoutDefault = withoutDefault.Substring(mod.Length);
+                break;
+            }
+        }
+
+        // The parameter name is the last word
+        var parts = withoutDefault.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+            return string.Empty;
+
+        // Last part is the name
+        return parts[^1].Trim();
     }
 
     private static async Task<Solution> UpdateMethodDeclarationAsync(
@@ -411,6 +553,77 @@ public class ChangeSignatureTool
         return true;
     }
 
+    private static async Task<List<(string FilePath, int Line, string Before, string After)>> GetSampleTransformationsAsync(
+        Solution solution,
+        List<(DocumentId DocId, ReferenceLocation RefLocation, string FilePath, int Line)> callSites,
+        IMethodSymbol methodSymbol,
+        Dictionary<int, int>? mapping,
+        CancellationToken cancellationToken)
+    {
+        var samples = new List<(string FilePath, int Line, string Before, string After)>();
+
+        foreach (var (docId, refLocation, filePath, line) in callSites)
+        {
+            var document = solution.GetDocument(docId);
+            if (document == null) continue;
+
+            var root = await document.GetSyntaxRootAsync(cancellationToken);
+            if (root == null) continue;
+
+            // Find the invocation expression at this location
+            var node = root.FindNode(refLocation.Location.SourceSpan);
+            var invocation = node.AncestorsAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .FirstOrDefault();
+
+            if (invocation == null) continue;
+
+            var before = invocation.ToString();
+
+            // Generate the transformed version
+            string after;
+            if (mapping != null && mapping.Any())
+            {
+                // Reorder arguments
+                var currentArgs = invocation.ArgumentList.Arguments;
+                var newArgs = new List<Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax>();
+                var argsList = currentArgs.ToList();
+
+                for (int i = 0; i < methodSymbol.Parameters.Length; i++)
+                {
+                    if (mapping.TryGetValue(i, out var sourceIndex) && sourceIndex < argsList.Count)
+                    {
+                        newArgs.Add(argsList[sourceIndex]);
+                    }
+                    else if (i < argsList.Count)
+                    {
+                        newArgs.Add(argsList[i]);
+                    }
+                }
+
+                // Add any remaining arguments
+                for (int i = newArgs.Count; i < argsList.Count; i++)
+                {
+                    newArgs.Add(argsList[i]);
+                }
+
+                var newArgList = Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ArgumentList(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxFactory.SeparatedList(newArgs));
+                var newInvocation = invocation.WithArgumentList(newArgList);
+                after = newInvocation.ToString();
+            }
+            else
+            {
+                // No mapping - the transformation is just signature change, arguments stay same
+                after = before;
+            }
+
+            samples.Add((filePath, line, before, after));
+        }
+
+        return samples;
+    }
+
     private static string BuildResponse(IMethodSymbol method, string newParameters, int filesChanged, int callsUpdated, List<(string FilePath, int Line)> delegateUsages, string? workspacePath)
     {
         var sb = new StringBuilder();
@@ -454,7 +667,14 @@ public class ChangeSignatureTool
         return sb.ToString();
     }
 
-    private static string BuildPreviewResponse(IMethodSymbol method, string newParameters, List<(string FilePath, int Line)> callSites, int filesAffected, List<(string FilePath, int Line)> delegateUsages, string? workspacePath)
+    private static string BuildPreviewResponse(
+        IMethodSymbol method,
+        string newParameters,
+        List<(string FilePath, int Line)> callSites,
+        int filesAffected,
+        List<(string FilePath, int Line)> delegateUsages,
+        string? workspacePath,
+        List<(string FilePath, int Line, string Before, string After)> samples)
     {
         var sb = new StringBuilder();
 
@@ -476,10 +696,35 @@ public class ChangeSignatureTool
             sb.AppendLine($"- ⚠️ **Delegate Usages**: {delegateUsages.Count} (cannot auto-update)");
         }
 
-        if (callSites.Count > 0)
+        // Show sample transformations first
+        if (samples.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("**Call Sites**:");
+            sb.AppendLine("### Sample Transformations");
+            sb.AppendLine();
+
+            foreach (var (filePath, line, before, after) in samples)
+            {
+                var displayPath = GetDisplayPath(filePath, workspacePath);
+                sb.AppendLine($"**`{displayPath}:{line}`**");
+                sb.AppendLine();
+                sb.AppendLine("Before:");
+                sb.AppendLine("```csharp");
+                sb.AppendLine(before);
+                sb.AppendLine("```");
+                sb.AppendLine();
+                sb.AppendLine("After:");
+                sb.AppendLine("```csharp");
+                sb.AppendLine(after);
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+        }
+
+        if (callSites.Count > 0)
+        {
+            sb.AppendLine("### All Call Sites");
+            sb.AppendLine();
 
             var groupedByFile = callSites
                 .GroupBy(c => c.FilePath)
