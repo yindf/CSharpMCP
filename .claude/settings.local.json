@@ -25,7 +25,16 @@
       "mcp__web-search-prime__webSearchPrime",
       "mcp__web-reader__webReader",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "mcp__CSharpMCP__load_workspace",
+      "mcp__CSharpMCP__get_symbols",
+      "mcp__CSharpMCP__get_diagnostics",
+      "mcp__web-search-prime__web_search_prime",
+      "mcp__CSharpMCP__search_symbols",
+      "mcp__CSharpMCP__rename_symbol",
+      "mcp__CSharpMCP__simplify_usings",
+      "mcp__CSharpMCP__change_signature",
+      "mcp__CSharpMCP__find_references"
     ]
   }
 }

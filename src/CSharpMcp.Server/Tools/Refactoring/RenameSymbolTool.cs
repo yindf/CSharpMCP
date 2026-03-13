@@ -3,12 +3,12 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CSharpMcp.Server.Roslyn;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Rename;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using CSharpMcp.Server.Roslyn;
 
 namespace CSharpMcp.Server.Tools.Refactoring;
 
@@ -90,23 +90,17 @@ public class RenameSymbolTool
                 solution.Options,
                 cancellationToken);
 
-            // Apply changes to workspace
-            var workspace = workspaceManager.GetCurrentSolution()?.Workspace;
-            if (workspace == null)
+            // Apply changes to workspace and persist to disk
+            var result = await workspaceManager.ApplyChangesAsync(newSolution, cancellationToken);
+            if (!result.Success)
             {
-                return GetErrorHelpResponse("Workspace not available for applying changes.");
-            }
-
-            var applied = workspace.TryApplyChanges(newSolution);
-            if (!applied)
-            {
-                return GetErrorHelpResponse("Failed to apply rename changes to workspace.");
+                return GetErrorHelpResponse(result.ErrorMessage ?? "Failed to apply rename changes.");
             }
 
             logger.LogInformation("Successfully renamed '{OldName}' to '{NewName}' across {Count} files",
-                symbol.Name, newName, affectedFiles);
+                symbol.Name, newName, result.ChangedFiles.Count);
 
-            return BuildSuccessResponse(symbol, newName, affectedFiles, totalRefs);
+            return BuildSuccessResponse(symbol, newName, result.ChangedFiles.Count, totalRefs);
         }
         catch (System.Exception ex)
         {

@@ -589,6 +589,7 @@ internal sealed partial class WorkspaceManager : IWorkspaceManager, IDisposable
         }
 
         _currentSolution = _workspace.CurrentSolution;
+        _userProjects = null; // Clear cached projects to force refresh from new solution
 
         _logger.LogInformation("Solution changes applied and saved: {Count} files", changedFiles.Count);
 
